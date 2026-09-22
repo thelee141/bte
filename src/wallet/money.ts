@@ -18,6 +18,20 @@ import { DECIMAL_ODDS_REGEX } from "../sports/types.js";
 
 export type MinorUnits = number & { readonly __brand: "MinorUnits" };
 
+/**
+ * A ledger balance may be negative (contra/system accounts such as the
+ * play-money mint debit without a funding source). Amounts are always
+ * non-negative `MinorUnits`; balances are signed `SignedMinorUnits`.
+ */
+export type SignedMinorUnits = number & { readonly __brand: "SignedMinorUnits" };
+
+export function validateSignedMinorUnits(value: unknown): SignedMinorUnits {
+  if (typeof value !== "number" || !Number.isInteger(value) || !Number.isSafeInteger(value)) {
+    throw new MoneyError(`Invalid SignedMinorUnits: ${String(value)}`);
+  }
+  return value as SignedMinorUnits;
+}
+
 export class MoneyError extends Error {
   constructor(message: string) {
     super(message);

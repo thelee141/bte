@@ -1,6 +1,6 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
-import { validateMinorUnits, type MinorUnits } from "./money.js";
+import { validateSignedMinorUnits, type SignedMinorUnits } from "./money.js";
 import {
   type WalletAccount,
   type WalletAccountKind,
@@ -83,7 +83,7 @@ export class LedgerService implements LedgerServiceShape {
     }
   }
 
-  async getBalance(accountId: string): Promise<MinorUnits> {
+  async getBalance(accountId: string): Promise<SignedMinorUnits> {
     if (!accountId) throw new WalletError("INVALID_ENTRY", "accountId required");
 
     const acc = await this.prisma.walletAccount.findUnique({
@@ -101,13 +101,11 @@ export class LedgerService implements LedgerServiceShape {
     const credit = agg._sum.creditMinor ?? 0;
     const debit = agg._sum.debitMinor ?? 0;
     const bal = credit - debit;
-    if (!Number.isSafeInteger(bal)) {
+    try {
+      return validateSignedMinorUnits(bal);
+    } catch {
       throw new WalletError("INVALID_AMOUNT", `Balance not safe integer ${bal}`);
     }
-    if (bal < 0) {
-      throw new WalletError("INVALID_AMOUNT", `Negative balance ${bal} for account ${accountId}`);
-    }
-    return validateMinorUnits(bal);
   }
 
   async post(input: PostInput): Promise<LedgerTransaction> {

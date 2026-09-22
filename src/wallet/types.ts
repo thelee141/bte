@@ -1,4 +1,4 @@
-import type { MinorUnits } from "./money.js";
+import type { MinorUnits, SignedMinorUnits } from "./money.js";
 
 export type WalletAccountKind = "REAL" | "BONUS";
 
@@ -72,7 +72,7 @@ export interface PostInput {
 
 export interface LedgerServiceShape {
   createAccount(userId: string, kind: WalletAccountKind, currency?: string): Promise<WalletAccount>;
-  getBalance(accountId: string): Promise<MinorUnits>;
+  getBalance(accountId: string): Promise<SignedMinorUnits>;
   post(input: PostInput): Promise<LedgerTransaction>;
   listTransactions(accountId: string, opts?: { limit?: number }): Promise<LedgerTransaction[]>;
 }

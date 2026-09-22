@@ -224,6 +224,13 @@ describe("wallet ledger", () => {
     ).rejects.toMatchObject({ code: "ACCOUNT_FROZEN" });
   });
 
+  it("system mint balance may be negative (signed balances)", async () => {
+    const userId = uniqueUserId();
+    await funding.grantPlayMoney({ userId, amount: toMinorUnits("25.00"), idempotencyKey: `grant_${randomUUID()}` });
+    const mintBal = await ledger.getBalance("system_play_mint");
+    expect(mintBal).toBe(-2500);
+  });
+
   it("listTransactions returns ordered history", async () => {
     const userId = uniqueUserId();
     const acc = await ledger.createAccount(userId, "REAL", "NGN");
