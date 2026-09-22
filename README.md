@@ -16,3 +16,10 @@ Source of truth: `SPORTSBOOK_MASTER_PLAN.md` + `docs/research/`.
 
 No dependencies installed yet — Meta slice 1 declares what it needs.
 Real-money mode is DISABLED; dev uses PLAY MONEY + sandbox stubs only.
+
+## Slice 01 — sports domain + fixture provider
+
+- `src/sports/`: canonical types, FixtureSportsProvider (seeded, synthetic),
+  normalize guards (no provider leakage, monotonic versions, stale rejection).
+- `prisma/schema.prisma`: SQLite catalogue models. `tests/sports.test.ts`: 11 tests.
+- Verify: `npm install`, `npm run typecheck`, `npm test`, `npm run db:migrate`.

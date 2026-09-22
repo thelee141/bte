@@ -1,0 +1,250 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Catalogue only — wallet/betting/settlement excluded in this slice
+
+model Sport {
+  id        String   @id
+  slug      String   @unique
+  name      String
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  categories   Category[]
+  competitions Competition[]
+  events       Event[]
+
+  @@map("sports")
+}
+
+model Category {
+  id        String   @id
+  slug      String   @unique
+  name      String
+  region    String?
+  sportId   String
+  sport     Sport    @relation(fields: [sportId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  competitions Competition[]
+  events       Event[]
+
+  @@index([sportId])
+  @@map("categories")
+}
+
+model Competition {
+  id         String   @id
+  slug       String   @unique
+  name       String
+  sportId    String
+  categoryId String
+  sport      Sport    @relation(fields: [sportId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  seasons Season[]
+  events  Event[]
+
+  @@index([sportId])
+  @@index([categoryId])
+  @@map("competitions")
+}
+
+model Season {
+  id            String      @id
+  slug          String      @unique
+  name          String
+  competitionId String
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  startsAt      DateTime?
+  endsAt        DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  events Event[]
+
+  @@index([competitionId])
+  @@map("seasons")
+}
+
+model Participant {
+  id        String   @id
+  slug      String   @unique
+  name      String
+  shortName String?
+  country   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  homeEvents Event[] @relation("HomeParticipant")
+  awayEvents Event[] @relation("AwayParticipant")
+
+  @@map("participants")
+}
+
+model Event {
+  id                String   @id
+  slug              String   @unique
+  sportId           String
+  categoryId        String
+  competitionId     String
+  seasonId          String?
+  homeParticipantId String
+  awayParticipantId String
+  startsAt          DateTime
+  status            String
+  liveClock         String?
+  period            String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  sport           Sport       @relation(fields: [sportId], references: [id], onDelete: Cascade)
+  category        Category    @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  competition     Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  season          Season?     @relation(fields: [seasonId], references: [id], onDelete: SetNull)
+  homeParticipant Participant @relation("HomeParticipant", fields: [homeParticipantId], references: [id], onDelete: Cascade)
+  awayParticipant Participant @relation("AwayParticipant", fields: [awayParticipantId], references: [id], onDelete: Cascade)
+
+  scores   Score[]
+  states   EventState[]
+  markets  Market[]
+  mappings ProviderEventMapping[]
+
+  @@index([competitionId, startsAt])
+  @@index([sportId])
+  @@index([categoryId])
+  @@index([seasonId])
+  @@map("events")
+}
+
+model Score {
+  id        String   @id
+  eventId   String
+  scope     String
+  home      Int
+  away      Int
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId])
+  @@map("scores")
+}
+
+model EventState {
+  id             String   @id
+  eventId        String
+  status         String
+  previousStatus String?
+  changedAt      DateTime @default(now())
+  reason         String?
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@index([eventId, changedAt])
+  @@map("event_states")
+}
+
+model Market {
+  id        String   @id
+  eventId   String
+  type      String
+  line      String?
+  state     String
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  event    Event         @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  outcomes Outcome[]
+  states   MarketState[]
+
+  @@index([eventId, state])
+  @@map("markets")
+}
+
+model Outcome {
+  id        String   @id
+  marketId  String
+  label     String
+  state     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  market Market  @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  prices Price[]
+
+  @@unique([marketId, label])
+  @@index([marketId])
+  @@map("outcomes")
+}
+
+model Price {
+  id          String    @id
+  outcomeId   String
+  version     Int
+  decimalOdds String
+  validFrom   DateTime
+  validTo     DateTime?
+  createdAt   DateTime  @default(now())
+
+  outcome Outcome @relation(fields: [outcomeId], references: [id], onDelete: Cascade)
+
+  @@unique([outcomeId, version])
+  @@index([outcomeId, version])
+  @@map("prices")
+}
+
+model MarketState {
+  id        String   @id
+  marketId  String
+  state     String
+  version   Int
+  changedAt DateTime @default(now())
+
+  market Market @relation(fields: [marketId], references: [id], onDelete: Cascade)
+
+  @@index([marketId, changedAt])
+  @@map("market_states")
+}
+
+model Provider {
+  id          String   @id
+  name        String   @unique
+  displayName String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  mappings ProviderEventMapping[]
+
+  @@map("providers")
+}
+
+model ProviderEventMapping {
+  id          String   @id
+  providerId  String
+  canonicalId String
+  nativeId    String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  provider Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  event    Event?   @relation(fields: [canonicalId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, nativeId])
+  @@unique([providerId, canonicalId])
+  @@index([canonicalId])
+  @@map("provider_event_mappings")
+}

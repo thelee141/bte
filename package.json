@@ -13,6 +13,16 @@
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate"
   },
-  "dependencies": {},
-  "devDependencies": {}
+  "dependencies": {
+    "@prisma/client": "^6.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "^9.20.0",
+    "prisma": "^6.5.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.24.0",
+    "vitest": "^3.0.0"
+  }
 }
