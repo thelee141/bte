@@ -22,4 +22,10 @@ Real-money mode is DISABLED; dev uses PLAY MONEY + sandbox stubs only.
 - `src/sports/`: canonical types, FixtureSportsProvider (seeded, synthetic),
   normalize guards (no provider leakage, monotonic versions, stale rejection).
 - `prisma/schema.prisma`: SQLite catalogue models. `tests/sports.test.ts`: 11 tests.
-- Verify: `npm install`, `npm run typecheck`, `npm test`, `npm run db:migrate`.
+- Verify: `pnpm install`, `pnpm run typecheck`, `pnpm test`, `pnpm run db:migrate`.
+
+## Slice 02 — wallet + immutable ledger
+
+- `src/wallet/`: minor-units math (half-up), typed errors, atomic idempotent
+  LedgerService (derived balances), play-money FundingService.
+- Prisma: WalletAccount/LedgerTransaction/LedgerEntry. Tests: money + wallet.

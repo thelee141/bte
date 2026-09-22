@@ -7,7 +7,7 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Catalogue only — wallet/betting/settlement excluded in this slice
+// Catalogue (slice 01) + wallet ledger (slice 02). Betting/settlement later.
 
 model Sport {
   id        String   @id
@@ -247,4 +247,54 @@ model ProviderEventMapping {
   @@unique([providerId, canonicalId])
   @@index([canonicalId])
   @@map("provider_event_mappings")
+}
+
+// --- Wallet subsystem (slice 02) ---
+
+model WalletAccount {
+  id        String   @id
+  userId    String
+  kind      String
+  currency  String   @default("NGN")
+  frozen    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  entries LedgerEntry[]
+
+  @@unique([userId, kind, currency])
+  @@index([userId])
+  @@map("wallet_accounts")
+}
+
+model LedgerTransaction {
+  id             String   @id
+  idempotencyKey String   @unique
+  kind           String
+  refType        String
+  refId          String
+  currency       String   @default("NGN")
+  status         String   @default("POSTED")
+  createdAt      DateTime @default(now())
+
+  entries LedgerEntry[]
+
+  @@index([refType, refId])
+  @@map("ledger_transactions")
+}
+
+model LedgerEntry {
+  id          String   @id
+  txnId       String
+  accountId   String
+  debitMinor  Int      @default(0)
+  creditMinor Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  txn     LedgerTransaction @relation(fields: [txnId], references: [id], onDelete: Cascade)
+  account WalletAccount     @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([txnId])
+  @@index([accountId])
+  @@map("ledger_entries")
 }
