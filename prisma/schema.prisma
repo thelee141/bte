@@ -261,6 +261,7 @@ model WalletAccount {
   updatedAt DateTime @updatedAt
 
   entries LedgerEntry[]
+  bets    Bet[]
 
   @@unique([userId, kind, currency])
   @@index([userId])
@@ -298,3 +299,51 @@ model LedgerEntry {
   @@index([accountId])
   @@map("ledger_entries")
 }
+
+// --- Betting subsystem (slice 03) ---
+
+model Bet {
+  id              String   @id
+  betRef          String   @unique
+  userId          String
+  walletAccountId String
+  idempotencyKey  String   @unique
+  stakeMinor      Int
+  totalOdds       String
+  potentialWinMinor Int
+  currency        String   @default("NGN")
+  status          String   @default("ACCEPTED")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  walletAccount WalletAccount @relation(fields: [walletAccountId], references: [id], onDelete: Restrict)
+  legs          BetLeg[]
+
+  @@index([userId])
+  @@index([walletAccountId])
+  @@map("bets")
+}
+
+model BetLeg {
+  id            String   @id
+  betId         String
+  eventId       String
+  marketId      String
+  outcomeId     String
+  priceId       String
+  priceVersion  Int
+  decimalOdds   String
+  marketVersion Int
+  marketState   String
+  outcomeState  String
+  createdAt     DateTime @default(now())
+
+  bet Bet @relation(fields: [betId], references: [id], onDelete: Cascade)
+
+  @@index([betId])
+  @@index([eventId])
+  @@index([marketId])
+  @@index([outcomeId])
+  @@map("bet_legs")
+}
+

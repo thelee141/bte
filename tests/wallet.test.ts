@@ -19,9 +19,19 @@ function minor(n: number): MinorUnits {
 }
 
 beforeEach(async () => {
-  await prisma.ledgerEntry.deleteMany({});
-  await prisma.ledgerTransaction.deleteMany({});
-  await prisma.walletAccount.deleteMany({});
+  await prisma.$transaction([
+    prisma.ledgerEntry.deleteMany({}),
+    prisma.ledgerTransaction.deleteMany({}),
+    prisma.betLeg.deleteMany({}),
+    prisma.bet.deleteMany({}),
+    prisma.walletAccount.deleteMany({
+      where: {
+        userId: {
+          notIn: ["system_play_mint", "system_stake_pool"],
+        },
+      },
+    }),
+  ]);
   await ensureSystemAccounts();
 });
 
