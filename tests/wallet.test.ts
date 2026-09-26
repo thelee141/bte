@@ -5,6 +5,7 @@ import { LedgerService } from "../src/wallet/ledger.js";
 import { FundingService } from "../src/wallet/funding.js";
 import { toMinorUnits } from "../src/wallet/money.js";
 import type { MinorUnits } from "../src/wallet/money.js";
+import { cleanDatabase } from "./helpers/db.js";
 
 const prisma = new PrismaClient();
 const ledger = new LedgerService(prisma);
@@ -19,19 +20,7 @@ function minor(n: number): MinorUnits {
 }
 
 beforeEach(async () => {
-  await prisma.$transaction([
-    prisma.ledgerEntry.deleteMany({}),
-    prisma.ledgerTransaction.deleteMany({}),
-    prisma.betLeg.deleteMany({}),
-    prisma.bet.deleteMany({}),
-    prisma.walletAccount.deleteMany({
-      where: {
-        userId: {
-          notIn: ["system_play_mint", "system_stake_pool"],
-        },
-      },
-    }),
-  ]);
+  await cleanDatabase(prisma);
   await ensureSystemAccounts();
 });
 
@@ -251,5 +240,70 @@ describe("wallet ledger", () => {
     const txns = await ledger.listTransactions(acc.id, { limit: 2 });
     expect(txns.length).toBe(2);
     expect(new Date(txns[0].createdAt).getTime()).toBeGreaterThanOrEqual(new Date(txns[1].createdAt).getTime());
+  });
+
+  it("post joins an injected transaction and rolls back with its caller", async () => {
+    const userId = uniqueUserId();
+    const acc = await ledger.createAccount(userId, "REAL", "NGN");
+    await funding.grantPlayMoney({
+      userId,
+      amount: toMinorUnits("20.00"),
+      idempotencyKey: `grant_${randomUUID()}`,
+    });
+
+    const idempotencyKey = `rollback_${randomUUID()}`;
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await ledger.post(
+          {
+            kind: "ADJUSTMENT",
+            idempotencyKey,
+            currency: "NGN",
+            refType: "TEST",
+            refId: "rollback",
+            entries: [
+              { accountId: acc.id, debitMinor: toMinorUnits("5.00") },
+              { accountId: "system_play_mint", creditMinor: toMinorUnits("5.00") },
+            ],
+          },
+          { tx },
+        );
+        throw new Error("force rollback");
+      }),
+    ).rejects.toThrow("force rollback");
+
+    expect(await prisma.ledgerTransaction.count({ where: { idempotencyKey } })).toBe(0);
+    expect(await ledger.getBalance(acc.id)).toBe(2000);
+  });
+
+  it("serializes different concurrent debits so a wallet cannot overspend", async () => {
+    const userId = uniqueUserId();
+    const acc = await ledger.createAccount(userId, "REAL", "NGN");
+    await funding.grantPlayMoney({
+      userId,
+      amount: toMinorUnits("10.00"),
+      idempotencyKey: `grant_${randomUUID()}`,
+    });
+
+    const results = await Promise.allSettled([
+      funding.debitStake({
+        userId,
+        amount: toMinorUnits("10.00"),
+        betRef: `bet_${randomUUID()}`,
+        idempotencyKey: `stake_${randomUUID()}`,
+      }),
+      funding.debitStake({
+        userId,
+        amount: toMinorUnits("10.00"),
+        betRef: `bet_${randomUUID()}`,
+        idempotencyKey: `stake_${randomUUID()}`,
+      }),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    const rejected = results.filter((result) => result.status === "rejected") as PromiseRejectedResult[];
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0].reason as { code?: string }).code).toBe("INSUFFICIENT_FUNDS");
+    expect(await ledger.getBalance(acc.id)).toBe(0);
   });
 });

@@ -1,24 +1,43 @@
-# SPORTSBOOK MASTER PLAN — source of truth (frozen spec, Sept 2026)
+# SPORTSBOOK MASTER PLAN — source of truth (Sept 2026)
 
 Original build. Comparable depth/workflows/usability to the audited product;
 NO trademarks, logos, copied graphics/code/copy, scraped odds, or trade dress.
 Real-money mode DISABLED until licensed. Dev = PLAY MONEY + sandbox.
 
+## Verified implementation checkpoints
+
+- [x] Slice 01 — canonical sports domain + deterministic fixture provider
+- [x] Slice 02 — immutable play-money wallet + double-entry ledger
+- [x] Slice 03 — atomic, idempotent server-authoritative bet placement
+- [x] Slice 04 — idempotent settlement, payout/refund, partial-void math, bet history
+- [ ] Slice 05 — booking codes + persisted betslip lifecycle
+- [ ] Slice 06 — live/realtime stream + reconnect/stale-state guarantees
+- [ ] Slice 07 — customer sportsbook web UI + responsive design system
+- [ ] Later — explicit resettlement/corrections, cashout, sandbox payments, promos,
+      accounts/RG/compliance/admin, games/virtuals/jackpot, hardening
+
+Current verified gate after Slice 04: 50/50 tests + typecheck + lint + build.
+Real-money mode remains OFF.
+
 ## Phase 0 — Foundations & unknowns
 
-- [ ] Choose stack; create manifests; record exact versions + official docs read
+- [x] Backend manifests created; exact current package versions pinned
+- [x] PostgreSQL + Prisma backend foundation established
+- [x] Prisma v6 transaction/error/raw-SQL docs checked for current concurrency behavior
+- [ ] Choose and pin the customer-web framework/design-system stack
 - [ ] Close OPEN_QUESTIONS 1–5 via re-audit (event detail, live, search, slip tabs, filters)
 - [ ] Close OPEN_QUESTIONS 6–11 via provider/help docs (games, jackpot, payments, loyalty)
-- [ ] threat-model + RG/compliance review sign-off
+- [ ] Threat-model + RG/compliance review sign-off
 - Acceptance: versions pinned, docs logged, unknowns triaged into phases
 - Risks: provider sandbox delays; legal timelines
+- Maintenance debt: pinned ESLint 9.39.5 is reported unsupported upstream; upgrade separately
 
 ## Phase 1 — Public sportsbook (prematch) + design system
 
 - [ ] IA: home, sport listing, league page, livescore, results, promos, help/legal, footer
 - [ ] Components: header, sports nav, tree, league blocks, event rows, odds buttons, +N links
 - [ ] Responsive 320→1440 per RESPONSIVE_AUDIT principles; skeletons/empty/error states
-- [ ] Canonical catalogue + provider-adapter stubs with fixture feeds
+- [x] Canonical catalogue + provider-adapter boundary + deterministic fixture feeds
 - Acceptance: fixture-driven pages render all routes; a11y + 44px targets; no provider IDs leak
 
 ## Phase 2 — Live betting + real-time
@@ -29,17 +48,42 @@ Real-money mode DISABLED until licensed. Dev = PLAY MONEY + sandbox.
 
 ## Phase 3 — Betslip, booking, bet lifecycle
 
-- [ ] State machine (BETSLIP_STATE_MACHINE.md) + atomic placement (BET_LIFECYCLE.md)
-- [ ] Singles/Multiple/System + Bet Builder (single-leg combined price)
-- [ ] Book/load/share codes; receipts with betRef/txnRef; Cashout quotes
-- [ ] Settlement engine: void legs, parlays, corrections, resettlement, audit
-- Acceptance: concurrency tests (double-submit, stale-price, suspend-mid-submit) all safe
+- [ ] Client betslip state machine from BETSLIP_STATE_MACHINE.md
+- [x] Atomic placement from BET_LIFECYCLE.md
+      - server-authoritative event/market/outcome/price validation
+      - immutable accepted-price snapshots
+      - atomic stake debit + bet persistence
+      - idempotent replay
+      - DB-safe concurrent overspend protection
+- [ ] Explicit bet-type layer: Singles / Multiple / System / Bet Builder
+      - current placement engine accepts one or multiple independent legs
+      - System and Builder semantics are NOT implemented yet
+- [ ] Book/load/share codes; receipt surface with betRef/txnRef
+- [ ] Cashout quotes/acceptance
+- [x] Settlement v1
+      - WON / LOST / VOID / PARTIAL_VOID
+      - void-leg removal from multiple odds
+      - all-void stake refund
+      - settlement + ledger credit/refund in one DB transaction
+      - idempotent concurrent replay
+      - open/settled history query
+- [ ] Result correction + resettlement ledger adjustments
+      - currently newer resultVersion returns RESETTLEMENT_REQUIRED
+      - no historical settlement is overwritten
+- Acceptance: concurrency tests (double-submit, stale-price, suspend-mid-submit,
+  double-settlement) safe; correction/resettlement still required before Phase 3 is complete
 
 ## Phase 4 — Wallet, payments (sandbox), promos
 
-- [ ] Immutable ledger (minor units), PaymentProvider abstraction, replay-safe webhooks, reconciliation
-- [ ] Bonus wallet: Flexi/1Cut/2UP/Odds-Boost-style mechanics with ORIGINAL rules text
-- [ ] Acceptance: sandbox deposit→bet→settle→withdraw loop reconciles to zero exceptions
+- [x] Immutable double-entry ledger using integer minor units
+- [x] Derived balances; no mutable user balance column
+- [x] Caller-owned transaction participation for atomic financial/domain writes
+- [x] Row-lock protection for balance-sensitive concurrent debits
+- [ ] PaymentProvider abstraction
+- [ ] Replay-safe payment webhooks
+- [ ] Deposit/withdrawal reconciliation
+- [ ] Bonus wallet: original Flexi/1Cut/2UP/Odds-Boost-style mechanics
+- Acceptance: sandbox deposit→bet→settle→withdraw loop reconciles to zero exceptions
 
 ## Phase 5 — Games/virtuals/jackpot (provider-backed)
 
@@ -60,9 +104,20 @@ Real-money mode DISABLED until licensed. Dev = PLAY MONEY + sandbox.
 - [ ] Compliance packet for counsel/regulator; go/no-go for licensing track
 - Acceptance: pen-test + reconciliation clean; real-money flag still OFF
 
-## MVP boundary (end of Phase 3 + sandbox wallet)
+## MVP boundary
 
-Prematch + live + slip/booking + play-money wallet + settlement on fixture feeds.
+Target remains: prematch + live + slip/booking + play-money wallet + settlement
+on fixture feeds.
+
+The backend transaction core now covers:
+catalogue → placement → ledger debit → open bet → settlement → payout/refund → history.
+
+Still required for MVP:
+- customer sportsbook UI
+- betslip persistence/booking codes
+- live/realtime delivery
+- explicit correction/resettlement
+- remaining Phase 3 acceptance work
 
 ## Production boundary (post Phase 7 + external gates)
 

@@ -278,7 +278,8 @@ model LedgerTransaction {
   status         String   @default("POSTED")
   createdAt      DateTime @default(now())
 
-  entries LedgerEntry[]
+  entries     LedgerEntry[]
+  settlements Settlement[] @relation("SettlementLedgerTxn")
 
   @@index([refType, refId])
   @@map("ledger_transactions")
@@ -312,12 +313,14 @@ model Bet {
   totalOdds       String
   potentialWinMinor Int
   currency        String   @default("NGN")
-  status          String   @default("ACCEPTED")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  status            String   @default("ACCEPTED")
+  settledAt         DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   walletAccount WalletAccount @relation(fields: [walletAccountId], references: [id], onDelete: Restrict)
   legs          BetLeg[]
+  settlements   Settlement[]
 
   @@index([userId])
   @@index([walletAccountId])
@@ -336,14 +339,53 @@ model BetLeg {
   marketVersion Int
   marketState   String
   outcomeState  String
+  status        String   @default("OPEN")
   createdAt     DateTime @default(now())
 
-  bet Bet @relation(fields: [betId], references: [id], onDelete: Cascade)
+  bet            Bet             @relation(fields: [betId], references: [id], onDelete: Cascade)
+  settlementLegs SettlementLeg[]
 
   @@index([betId])
   @@index([eventId])
   @@index([marketId])
   @@index([outcomeId])
   @@map("bet_legs")
+}
+
+// --- Settlement subsystem (slice 04) ---
+
+model Settlement {
+  id             String   @id
+  betId          String
+  resultVersion  Int
+  source         String
+  outcome        String
+  creditMinor    Int
+  decisionHash   String
+  ledgerTxnId    String?  @unique
+  createdAt      DateTime @default(now())
+
+  bet       Bet                @relation(fields: [betId], references: [id], onDelete: Cascade)
+  ledgerTxn LedgerTransaction? @relation("SettlementLedgerTxn", fields: [ledgerTxnId], references: [id], onDelete: Restrict)
+  legs      SettlementLeg[]
+
+  @@unique([betId, resultVersion])
+  @@index([betId, createdAt])
+  @@map("settlements")
+}
+
+model SettlementLeg {
+  id           String   @id
+  settlementId String
+  betLegId     String
+  outcome      String
+  createdAt    DateTime @default(now())
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  betLeg     BetLeg     @relation(fields: [betLegId], references: [id], onDelete: Restrict)
+
+  @@unique([settlementId, betLegId])
+  @@index([betLegId])
+  @@map("settlement_legs")
 }
 

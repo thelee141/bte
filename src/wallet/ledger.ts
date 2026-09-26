@@ -7,12 +7,15 @@ import {
   type LedgerTransaction,
   type PostInput,
   type LedgerServiceShape,
+  type LedgerTx,
   WalletError,
 } from "./types.js";
 
 const DEFAULT_CURRENCY = "NGN";
 const SYSTEM_PLAY_MINT_ID = "system_play_mint";
 const SYSTEM_STAKE_POOL_ID = "system_stake_pool";
+
+type LedgerDb = Pick<LedgerTx, "walletAccount" | "ledgerEntry" | "ledgerTransaction" | "$queryRaw">;
 
 function isPrismaUniqueViolation(e: unknown): boolean {
   return e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
@@ -36,7 +39,6 @@ export class LedgerService implements LedgerServiceShape {
       if (existing) continue;
       try {
         await this.prisma.walletAccount.create({
-          // distinct userId per system account: (userId,kind,currency) is unique
           data: { id, userId: id, kind: "REAL", currency: DEFAULT_CURRENCY, frozen: false },
         });
       } catch {
@@ -83,33 +85,19 @@ export class LedgerService implements LedgerServiceShape {
     }
   }
 
-  async getBalance(accountId: string): Promise<SignedMinorUnits> {
+  async getBalance(accountId: string, opts?: { tx?: LedgerTx }): Promise<SignedMinorUnits> {
     if (!accountId) throw new WalletError("INVALID_ENTRY", "accountId required");
-
-    const acc = await this.prisma.walletAccount.findUnique({
-      where: { id: accountId },
-    });
-    if (!acc) {
-      throw new WalletError("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`);
-    }
-
-    const agg = await this.prisma.ledgerEntry.aggregate({
-      where: { accountId },
-      _sum: { creditMinor: true, debitMinor: true },
-    });
-
-    const credit = agg._sum.creditMinor ?? 0;
-    const debit = agg._sum.debitMinor ?? 0;
-    const bal = credit - debit;
-    try {
-      return validateSignedMinorUnits(bal);
-    } catch {
-      throw new WalletError("INVALID_AMOUNT", `Balance not safe integer ${bal}`);
-    }
+    const db = (opts?.tx ?? this.prisma) as LedgerDb;
+    return this.getBalanceWithDb(db, accountId);
   }
 
-  async post(input: PostInput): Promise<LedgerTransaction> {
+  async post(input: PostInput, opts?: { tx?: LedgerTx }): Promise<LedgerTransaction> {
     this.validatePostInput(input);
+
+    if (opts?.tx) {
+      const result = await this.postWithinTransaction(opts.tx as LedgerDb, input);
+      return result as unknown as LedgerTransaction;
+    }
 
     const existingOutside = await this.prisma.ledgerTransaction.findUnique({
       where: { idempotencyKey: input.idempotencyKey },
@@ -120,99 +108,7 @@ export class LedgerService implements LedgerServiceShape {
     }
 
     try {
-      const result = await this.prisma.$transaction(async (tx) => {
-        const existingInside = await tx.ledgerTransaction.findUnique({
-          where: { idempotencyKey: input.idempotencyKey },
-          include: { entries: true },
-        });
-        if (existingInside) {
-          return existingInside;
-        }
-
-        const accountIds = [...new Set(input.entries.map((e) => e.accountId))];
-        const accounts = await tx.walletAccount.findMany({
-          where: { id: { in: accountIds } },
-        });
-        const accountMap = new Map(accounts.map((a) => [a.id, a]));
-
-        for (const aid of accountIds) {
-          const acc = accountMap.get(aid);
-          if (!acc) {
-            throw new WalletError("ACCOUNT_NOT_FOUND", `Account ${aid} not found`);
-          }
-          if (acc.frozen) {
-            throw new WalletError("ACCOUNT_FROZEN", `Account ${aid} frozen`);
-          }
-          if (acc.currency !== input.currency) {
-            throw new WalletError(
-              "CURRENCY_MISMATCH",
-              `Account ${aid} currency ${acc.currency} != txn currency ${input.currency}`,
-            );
-          }
-        }
-
-        const debitPerAccount = new Map<string, number>();
-        for (const e of input.entries) {
-          const debit = (e.debitMinor ?? 0) as number;
-          if (debit > 0) {
-            debitPerAccount.set(e.accountId, (debitPerAccount.get(e.accountId) ?? 0) + debit);
-          }
-        }
-
-        for (const [accountId, totalDebit] of debitPerAccount) {
-          // System mint is the play-money source: allowed to debit without prior balance.
-          if (isSystemMintId(accountId)) continue;
-
-          const agg = await tx.ledgerEntry.aggregate({
-            where: { accountId },
-            _sum: { creditMinor: true, debitMinor: true },
-          });
-          const credit = agg._sum.creditMinor ?? 0;
-          const debit = agg._sum.debitMinor ?? 0;
-          const balance = credit - debit;
-          if (balance < totalDebit) {
-            throw new WalletError(
-              "INSUFFICIENT_FUNDS",
-              `Insufficient funds for account ${accountId}: balance ${balance} < debit ${totalDebit}`,
-            );
-          }
-        }
-
-        const txnId = randomUUID();
-        const createdTxn = await tx.ledgerTransaction.create({
-          data: {
-            id: txnId,
-            idempotencyKey: input.idempotencyKey,
-            kind: input.kind,
-            refType: input.refType,
-            refId: input.refId,
-            currency: input.currency,
-            status: "POSTED",
-          },
-        });
-
-        for (const e of input.entries) {
-          const debit = (e.debitMinor ?? 0) as number;
-          const credit = (e.creditMinor ?? 0) as number;
-          await tx.ledgerEntry.create({
-            data: {
-              id: randomUUID(),
-              txnId: createdTxn.id,
-              accountId: e.accountId,
-              debitMinor: debit,
-              creditMinor: credit,
-            },
-          });
-        }
-
-        const withEntries = await tx.ledgerTransaction.findUnique({
-          where: { id: createdTxn.id },
-          include: { entries: true },
-        });
-        if (!withEntries) throw new WalletError("INVALID_ENTRY", "Transaction write failed");
-        return withEntries;
-      });
-
+      const result = await this.prisma.$transaction(async (tx) => this.postWithinTransaction(tx as LedgerDb, input));
       return result as unknown as LedgerTransaction;
     } catch (e) {
       if (e instanceof WalletError) throw e;
@@ -247,6 +143,121 @@ export class LedgerService implements LedgerServiceShape {
       include: { entries: true },
     });
     return txns as unknown as LedgerTransaction[];
+  }
+
+  private async getBalanceWithDb(db: LedgerDb, accountId: string): Promise<SignedMinorUnits> {
+    const acc = await db.walletAccount.findUnique({
+      where: { id: accountId },
+    });
+    if (!acc) {
+      throw new WalletError("ACCOUNT_NOT_FOUND", `Account ${accountId} not found`);
+    }
+
+    const agg = await db.ledgerEntry.aggregate({
+      where: { accountId },
+      _sum: { creditMinor: true, debitMinor: true },
+    });
+
+    const credit = agg._sum.creditMinor ?? 0;
+    const debit = agg._sum.debitMinor ?? 0;
+    const bal = credit - debit;
+    try {
+      return validateSignedMinorUnits(bal);
+    } catch {
+      throw new WalletError("INVALID_AMOUNT", `Balance not safe integer ${bal}`);
+    }
+  }
+
+  private async postWithinTransaction(db: LedgerDb, input: PostInput) {
+    const existingInside = await db.ledgerTransaction.findUnique({
+      where: { idempotencyKey: input.idempotencyKey },
+      include: { entries: true },
+    });
+    if (existingInside) {
+      return existingInside;
+    }
+
+    const accountIds = [...new Set(input.entries.map((e) => e.accountId))];
+    const accounts = await db.walletAccount.findMany({
+      where: { id: { in: accountIds } },
+    });
+    const accountMap = new Map(accounts.map((a) => [a.id, a]));
+
+    for (const aid of accountIds) {
+      const acc = accountMap.get(aid);
+      if (!acc) {
+        throw new WalletError("ACCOUNT_NOT_FOUND", `Account ${aid} not found`);
+      }
+      if (acc.frozen) {
+        throw new WalletError("ACCOUNT_FROZEN", `Account ${aid} frozen`);
+      }
+      if (acc.currency !== input.currency) {
+        throw new WalletError(
+          "CURRENCY_MISMATCH",
+          `Account ${aid} currency ${acc.currency} != txn currency ${input.currency}`,
+        );
+      }
+    }
+
+    const debitPerAccount = new Map<string, number>();
+    for (const e of input.entries) {
+      const debit = (e.debitMinor ?? 0) as number;
+      if (debit > 0) {
+        debitPerAccount.set(e.accountId, (debitPerAccount.get(e.accountId) ?? 0) + debit);
+      }
+    }
+
+    // Serialize balance-sensitive debits at the database row level. This keeps
+    // callers safe even when they use different idempotency keys/processes.
+    for (const accountId of [...debitPerAccount.keys()].sort()) {
+      if (isSystemMintId(accountId)) continue;
+      await db.$queryRaw`SELECT id FROM "wallet_accounts" WHERE id = ${accountId} FOR UPDATE`;
+    }
+
+    for (const [accountId, totalDebit] of debitPerAccount) {
+      if (isSystemMintId(accountId)) continue;
+      const balance = await this.getBalanceWithDb(db, accountId);
+      if (balance < totalDebit) {
+        throw new WalletError(
+          "INSUFFICIENT_FUNDS",
+          `Insufficient funds for account ${accountId}: balance ${balance} < debit ${totalDebit}`,
+        );
+      }
+    }
+
+    const txnId = randomUUID();
+    const createdTxn = await db.ledgerTransaction.create({
+      data: {
+        id: txnId,
+        idempotencyKey: input.idempotencyKey,
+        kind: input.kind,
+        refType: input.refType,
+        refId: input.refId,
+        currency: input.currency,
+        status: "POSTED",
+      },
+    });
+
+    for (const e of input.entries) {
+      const debit = (e.debitMinor ?? 0) as number;
+      const credit = (e.creditMinor ?? 0) as number;
+      await db.ledgerEntry.create({
+        data: {
+          id: randomUUID(),
+          txnId: createdTxn.id,
+          accountId: e.accountId,
+          debitMinor: debit,
+          creditMinor: credit,
+        },
+      });
+    }
+
+    const withEntries = await db.ledgerTransaction.findUnique({
+      where: { id: createdTxn.id },
+      include: { entries: true },
+    });
+    if (!withEntries) throw new WalletError("INVALID_ENTRY", "Transaction write failed");
+    return withEntries;
   }
 
   private validatePostInput(input: PostInput): void {

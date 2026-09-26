@@ -1,4 +1,7 @@
+import type { Prisma } from "@prisma/client";
 import type { MinorUnits, SignedMinorUnits } from "./money.js";
+
+export type LedgerTx = Prisma.TransactionClient;
 
 export type WalletAccountKind = "REAL" | "BONUS";
 
@@ -72,7 +75,7 @@ export interface PostInput {
 
 export interface LedgerServiceShape {
   createAccount(userId: string, kind: WalletAccountKind, currency?: string): Promise<WalletAccount>;
-  getBalance(accountId: string): Promise<SignedMinorUnits>;
-  post(input: PostInput): Promise<LedgerTransaction>;
+  getBalance(accountId: string, opts?: { tx?: LedgerTx }): Promise<SignedMinorUnits>;
+  post(input: PostInput, opts?: { tx?: LedgerTx }): Promise<LedgerTransaction>;
   listTransactions(accountId: string, opts?: { limit?: number }): Promise<LedgerTransaction[]>;
 }

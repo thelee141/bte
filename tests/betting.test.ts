@@ -9,6 +9,7 @@ import { FundingService } from "../src/wallet/funding.js";
 import { BettingService } from "../src/betting/service.js";
 import { toMinorUnits } from "../src/wallet/money.js";
 import type { AcceptedBet } from "../src/betting/types.js";
+import { cleanDatabase } from "./helpers/db.js";
 
 const prisma = new PrismaClient();
 const ledger = new LedgerService(prisma);
@@ -87,19 +88,7 @@ class TestProvider implements SportsProvider {
 const testProvider = new TestProvider();
 
 beforeEach(async () => {
-  await prisma.$transaction([
-    prisma.betLeg.deleteMany({}),
-    prisma.bet.deleteMany({}),
-    prisma.ledgerEntry.deleteMany({}),
-    prisma.ledgerTransaction.deleteMany({}),
-    prisma.walletAccount.deleteMany({
-      where: {
-        userId: {
-          notIn: ["system_play_mint", "system_stake_pool"],
-        },
-      },
-    }),
-  ]);
+  await cleanDatabase(prisma);
   await ledger.ensureSystemAccounts();
   testProvider.clear();
 });

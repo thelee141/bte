@@ -1,31 +1,95 @@
-# bte sportbook — original sportsbook platform (play-money dev)
+# bte sportsbook — original sportsbook platform (play-money dev)
 
 Source of truth: `SPORTSBOOK_MASTER_PLAN.md` + `docs/research/`.
 
-## Commands (verified 22 Sept 2026, node v24.19.0 / npm 11.17.0)
+Real-money mode is **DISABLED**. Current development uses deterministic fixture
+sports data and PLAY MONEY only.
 
-| Purpose    | Command              |
-|------------|----------------------|
-| install    | `npm install`        |
-| typecheck  | `npm run typecheck`  |
-| lint       | `npm run lint`       |
-| unit test  | `npm test`           |
-| build      | `npm run build`      |
-| migrate    | `npm run db:migrate` |
-| prisma gen | `npm run db:generate`|
+## Runtime and tooling
 
-No dependencies installed yet — Meta slice 1 declares what it needs.
-Real-money mode is DISABLED; dev uses PLAY MONEY + sandbox stubs only.
+Verified 26 Sept 2026:
 
-## Slice 01 — sports domain + fixture provider
+| Tool | Version |
+|---|---:|
+| Node.js | 24.19.0 |
+| pnpm | 11.22.0 |
+| TypeScript | 5.9.3 |
+| Prisma / @prisma/client | 6.19.3 |
+| Vitest | 3.2.7 |
+| ESLint | 9.39.5 |
+| PostgreSQL | local `bte_dev` database |
 
-- `src/sports/`: canonical types, FixtureSportsProvider (seeded, synthetic),
-  normalize guards (no provider leakage, monotonic versions, stale rejection).
-- `prisma/schema.prisma`: SQLite catalogue models. `tests/sports.test.ts`: 11 tests.
-- Verify: `pnpm install`, `pnpm run typecheck`, `pnpm test`, `pnpm run db:migrate`.
+Direct package versions are pinned in `package.json` and `pnpm-lock.yaml`.
 
-## Slice 02 — wallet + immutable ledger
+## Commands
 
-- `src/wallet/`: minor-units math (half-up), typed errors, atomic idempotent
-  LedgerService (derived balances), play-money FundingService.
-- Prisma: WalletAccount/LedgerTransaction/LedgerEntry. Tests: money + wallet.
+| Purpose | Command |
+|---|---|
+| install | `pnpm install` |
+| typecheck | `pnpm run typecheck` |
+| lint | `pnpm run lint` |
+| test | `pnpm test` |
+| build | `pnpm run build` |
+| migrate | `pnpm run db:migrate` |
+| Prisma generate | `pnpm run db:generate` |
+
+## Verified implementation checkpoints
+
+### Slice 01 — sports domain + deterministic fixture provider
+
+- `src/sports/`: canonical sports types, deterministic `FixtureSportsProvider`,
+  normalization guards, provider-ID isolation, versioned prices.
+- PostgreSQL catalogue schema and migrations.
+- Sports tests cover canonicalization, deterministic fixtures, filtering and stale
+  price handling.
+
+### Slice 02 — wallet + immutable ledger
+
+- `src/wallet/`: minor-unit money math, signed derived balances, typed wallet
+  errors, immutable double-entry ledger and play-money funding.
+- No mutable balance column; balances derive from ledger entries.
+- Ledger posting can now join a caller-owned Prisma transaction, so financial
+  effects can commit atomically with betting/settlement state.
+- Database row locks protect balance-sensitive concurrent debits.
+
+### Slice 03 — atomic idempotent bet placement
+
+- `src/betting/`: server-authoritative selection/price validation, accepted-price
+  snapshots, atomic stake debit + bet persistence, idempotency and concurrency
+  handling.
+- PostgreSQL `FOR UPDATE` + Serializable transactions protect concurrent placement.
+- Bounded serialization retries prevent raw Prisma/PostgreSQL transaction errors
+  leaking through the betting contract.
+
+### Slice 04 — settlement + payout/refund + history
+
+- `src/settlement/`: versioned, idempotent settlement for WON / LOST / VOID /
+  PARTIAL_VOID outcomes.
+- Winning payouts and void refunds are committed in the same DB transaction as
+  settlement records and bet/leg terminal state.
+- Void legs drop out of multiple odds; all-void bets refund the stake.
+- Concurrent identical settlement is replay-safe and cannot double-credit.
+- Open/settled bet-history queries are available.
+- Result corrections/resettlement are intentionally **not** enabled yet: a newer
+  result version returns `RESETTLEMENT_REQUIRED` until correction accounting is
+  implemented explicitly.
+
+Current verification gate: **50 tests**, plus typecheck, lint and build.
+
+## Transaction docs consulted
+
+The transaction/concurrency implementation was checked against current Prisma ORM
+v6 documentation on 26 Sept 2026:
+
+- Prisma transactions / isolation levels / P2034 retry guidance
+- Prisma v6 error reference, including P2010 raw-query errors
+- Prisma raw SQL documentation
+
+See `SPORTSBOOK_MASTER_PLAN.md` for remaining product phases.
+
+## Maintenance note
+
+`eslint@9.39.5` is the version already installed and is now pinned for
+reproducibility, but pnpm reports that release as unsupported upstream. Upgrade it
+in a dedicated tooling-maintenance change rather than mixing it into sportsbook
+domain work.
