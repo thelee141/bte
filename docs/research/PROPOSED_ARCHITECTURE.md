@@ -22,20 +22,16 @@ bet-placement svc ──▶ ledger (immutable) ──▶ settlement engine (idem
 admin/operator console (RBAC, SoD, audit) ◀─────────────┘
 ```
 
-- Client: original SPA (mobile-first) consuming versioned API + WS price
+- Client: original SPA (mobile-first) consuming versioned API + WS/SSE price
   stream; never trusts its own odds/balance; resyncs on reconnect.
 - Backend: modular monolith first (catalog, trading-ingest, betting, wallet,
   settlement, promo, admin), separable later. Outbox + idempotent consumers.
 - Data: RDBMS (canonical + ledger), cache for prices/sessions, object storage
   for KYC/docs, append-only audit log.
-- Real-time: provider poll/stream → normalizer → store → pubsub → WS gateway
-  with `priceVersionId` per tick; client flashes moves, suspends on stale.
+- Real-time: provider poll/stream → normalizer → store → pubsub → WS/SSE gateway
+  with per-entity versions; client flashes moves and suspends on stale state.
 - Admin: user/KYC lookup, deposits/withdrawals/reconciliation, events/markets
   + suspension, settlement/resettlement, bet/txn lookup, promo/bonus/CMS,
   geo + support cases, RG actions, audit + system status.
-- Docs consulted: none local (empty repo). Before implementation, pin exact
-  framework/runtime versions from new manifests and read their current
-  official docs (record in MASTER_PLAN Phase 0).
-
-INFERRED about third-party-sportsbook only: Vue SPA + CDN + WAF (from `data-v-*` DOM and
-CloudFront 403s). Nothing else claimed about their backend.
+- External product observations informed only interaction-shape requirements.
+  BTE does not depend on or claim knowledge of any third-party backend architecture.

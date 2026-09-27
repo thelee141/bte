@@ -1,20 +1,19 @@
-# Game Product Matrix (OBSERVED structure, no mechanics copied)
+# Game Product Matrix (structural reference, no mechanics copied)
 
-| Product | Entry (observed) | Lobby/detail (observed) | Round/stake concepts (PROPOSED — verify w/ provider docs) |
+| Product | Entry pattern | Lobby/detail pattern | Round/stake concepts (PROPOSED — verify with provider docs) |
 |---|---|---|---|
-| Sportsbook | `/ng/` home | Rows + `+N` deep links | Standard bet lifecycle |
-| Live betting | `/ng/sport/live/` | Counters seen; rows stalled | Clock/score/suspend/accept-delay |
-| Games/Casino | `/ng/games` iframe lobby, search, POPULAR/NEW/EXCLUSIVE + player counts | Overlay w/ Exit + Login gate | Provider-iframe launch, demo-vs-real, limits |
-| Instant/virtuals | `/instant-virtuals`, vFootball | Routes only | Rapid rounds, multi-panel stake, multiplier, cashout, auto-bet/cashout, history, fairness page |
-| Scheduled virtuals | `/ng/virtual/` | Route only | Timed draws, countdown, results archive |
-| Jackpot | `/ng/jackpot/` + help entry | Route only | Picks grid, rounds, prize tiers, rollover |
+| Sportsbook | sportsbook home | Rows + market-depth links | Standard bet lifecycle |
+| Live betting | live sportsbook surface | Counters, clocks, score state | Clock/score/suspend/accept-delay |
+| Games/Casino | games lobby + search + catalogue badges | Embedded provider launch + login gate | Provider iframe launch, demo-vs-real, limits |
+| Instant/virtuals | instant virtuals surface | Route family only | Rapid rounds, multi-panel stake, multiplier, cashout, auto-bet/cashout, history, fairness page |
+| Scheduled virtuals | scheduled virtuals surface | Route family only | Timed draws, countdown, results archive |
+| Jackpot | jackpot surface + help entry | Route family only | Picks grid, rounds, prize tiers, rollover |
 | Lucky Numbers | Help entry only | Unverified | Number-draw betting |
-| Promotions | `/ng/promotions/` hub + `activityId` details | 15+ promos; Flexi/1Cut/2UP/Odds Boost evergreen | Bonus wallet + wagering engine |
-| Loyalty | `/my_accounts/loyalty` | Unverified (auth-gated) | Points/tiers engine |
-| Livescore | Subdomain, rich grid | FT/HT/AP, pins, radar | Read-only data product |
+| Promotions | promotions hub + detail pages | Multiple promo categories | Bonus wallet + wagering engine |
+| Loyalty | account loyalty surface | Unverified (auth-gated) | Points/tiers engine |
+| Livescore | external livescore surface | FT/HT/AP, pins, radar | Read-only data product |
 
-Crash/instant (Aviator/JetX-type) known ONLY from promo titles ("Aviator
-Missions", "JetX: NGN 50,000 in Free Bet Gifts", "Ride the crash") — round
-lifecycle, fairness (RNG/provably-fair), and limits are OPEN QUESTIONS.
+Crash/instant-game mechanics were not reverse-engineered. Round lifecycle,
+fairness (RNG/provably-fair), and limits remain OPEN QUESTIONS.
 PROPOSED rule: no production RNG in reconnaissance; game outcomes come from
-certified providers behind an adapter; our wallet only debits/credits.
+certified providers behind an adapter; BTE's wallet only debits/credits.
