@@ -1,198 +1,385 @@
-# bte sportsbook — original sportsbook platform (play-money dev)
+# BTE — Open-Source Play-Money Sportsbook Engine
 
-Source of truth: `SPORTSBOOK_MASTER_PLAN.md` + `docs/research/`.
+**BTE is an open-source, play-money sportsbook engine and sports betting platform reference implementation focused on transactional correctness, realtime market state, immutable accounting, and production-grade betting workflows.**
 
-Real-money mode is **DISABLED**. Current development uses deterministic fixture
-sports data and PLAY MONEY only.
+Built with **TypeScript, Node.js, React, Vite, Prisma, and PostgreSQL**, BTE implements the difficult parts of a modern sportsbook: server-authoritative odds, atomic bet placement, a double-entry ledger, persisted betslips and booking codes, realtime SSE updates, settlement, append-only result corrections, and a responsive customer sportsbook UI.
 
-## Runtime and tooling
+> **Play money only.** Real-money operation is intentionally not part of the public BTE distribution.
 
-Verified 27 Sept 2026:
+BTE is useful both as a sportsbook reference architecture and as a broader example of how to design concurrent, auditable transaction systems.
 
-| Tool | Version |
-|---|---:|
-| Node.js | 24.19.0 |
-| pnpm | 11.22.0 |
-| TypeScript | 5.9.3 |
-| Prisma / @prisma/client | 6.19.3 |
-| React / React DOM | 19.3.0 |
-| Vite | 8.3.1 |
-| Vitest | 3.2.7 |
-| ESLint | 9.39.5 |
-| PostgreSQL | local `bte_dev` database |
+## Why BTE exists
 
-Direct package versions are pinned in `package.json` and `pnpm-lock.yaml`.
+Most demo betting apps stop at UI screens and mutable balances.
 
-## Commands
+BTE focuses on the failure-prone systems behind the interface:
 
-| Purpose | Command |
+- what happens when two requests try to spend the same wallet balance;
+- how accepted odds are frozen without trusting the browser;
+- how bet acceptance and stake debit commit atomically;
+- how realtime price/state updates reconnect without regressing;
+- how settlements remain idempotent;
+- how corrected results reverse and re-award value without rewriting history;
+- how booking codes load current prices instead of pretending historical quotes are reserved.
+
+The result is an original, fixture-driven, play-money sportsbook platform with a transaction model intended to be inspectable, testable, and reusable.
+
+## Capabilities
+
+| Area | Implemented |
 |---|---|
-| install | `pnpm install` |
-| API dev server | `pnpm run dev:api` |
-| customer web dev server | `pnpm run dev:web` |
-| typecheck | `pnpm run typecheck` |
-| lint | `pnpm run lint` |
-| test | `pnpm test` |
-| production build | `pnpm run build` |
-| serve built customer app + API | `pnpm start` |
-| migrate | `pnpm run db:migrate` |
-| Prisma generate | `pnpm run db:generate` |
+| Sports catalogue | Canonical sports/events/markets/outcomes, provider isolation, deterministic fixture provider |
+| Realtime odds | SSE stream, monotonic entity versions, reconnect replay/resync, score/clock/state updates |
+| Betslip | Persisted draft slips, selection replacement, stake persistence, explicit changed-price acceptance |
+| Booking codes | Human-safe codes, TTLs, atomic max-use limits, current-price loading/import |
+| Bet placement | Atomic stake debit + bet persistence, server-authoritative validation, idempotency |
+| Wallet | Immutable double-entry ledger, integer minor units, derived balances, concurrency-safe debits |
+| Settlement | WON / LOST / VOID / PARTIAL_VOID accounting with atomic payout/refund |
+| Corrections | Append-only resettlement revisions, reversal + re-award accounting, stale-version protection |
+| History & receipts | Open/settled history, immutable bet references and ledger transaction references |
+| Customer UI | Responsive React sportsbook, desktop betslip, mobile sheet, My Bets, results/promos/help surfaces |
+| Realtime UI | Live clocks/scores/stats, price flashes, trading suspension state |
+| Verification | 86 tests plus typecheck, lint, production build, migration replay and upgrade checks |
 
-## Verified implementation checkpoints
+## Architecture
 
-### Slice 01 — sports domain + deterministic fixture provider
+```mermaid
+flowchart TD
+    UI[React Customer Sportsbook]
+    API[Customer HTTP API]
+    SSE[Realtime SSE Gateway]
+    SPORTS[Sports Catalogue + Provider Adapter]
+    SLIP[Persisted Betslip + Booking Codes]
+    BET[Bet Placement Engine]
+    LEDGER[Immutable Double-Entry Ledger]
+    SETTLE[Settlement Engine]
+    CORRECT[Resettlement / Result Corrections]
+    DB[(PostgreSQL)]
 
-- `src/sports/`: canonical sports types, deterministic `FixtureSportsProvider`,
-  normalization guards, provider-ID isolation, versioned prices.
-- PostgreSQL catalogue schema and migrations.
-- Sports tests cover canonicalization, deterministic fixtures, filtering and stale
-  price handling.
+    UI --> API
+    SSE --> UI
+    API --> SPORTS
+    API --> SLIP
+    SLIP --> BET
+    SPORTS --> BET
+    BET --> LEDGER
+    BET --> DB
+    LEDGER --> DB
+    SETTLE --> LEDGER
+    SETTLE --> DB
+    CORRECT --> LEDGER
+    CORRECT --> DB
+```
 
-### Slice 02 — wallet + immutable ledger
+BTE starts as a modular monolith. Domain boundaries are explicit enough that provider ingestion, realtime delivery, wallet/accounting, settlement, and operator integrations can be separated later without changing the core transaction rules.
 
-- `src/wallet/`: minor-unit money math, signed derived balances, typed wallet
-  errors, immutable double-entry ledger and play-money funding.
-- No mutable balance column; balances derive from ledger entries.
-- Ledger posting can now join a caller-owned Prisma transaction, so financial
-  effects can commit atomically with betting/settlement state.
-- Database row locks protect balance-sensitive concurrent debits.
+## Core invariants
 
-### Slice 03 — atomic idempotent bet placement
+These rules are more important than any individual feature:
 
-- `src/betting/`: server-authoritative selection/price validation, accepted-price
-  snapshots, atomic stake debit + bet persistence, idempotency and concurrency
-  handling.
-- PostgreSQL `FOR UPDATE` + Serializable transactions protect concurrent placement.
-- Bounded serialization retries prevent raw Prisma/PostgreSQL transaction errors
-  leaking through the betting contract.
+- **Money uses integer minor units.**
+- **Wallet balance is derived from immutable ledger entries.** There is no mutable user balance column.
+- **The browser is never authoritative for odds, balance, or market state.**
+- **Bet acceptance and stake debit are atomic.**
+- **Accepted price/version snapshots are immutable on bet legs.**
+- **Idempotency keys prevent duplicate monetary effects.**
+- **Concurrent requests cannot overspend one wallet.**
+- **Realtime entity versions reject stale or duplicate updates.**
+- **Settlement and payout/refund commit atomically.**
+- **Corrected results append revisions rather than rewriting previous settlements.**
+- **Ordinary customer writes cannot use the negative/frozen-wallet accounting bypasses reserved for authoritative corrections.**
+- **The public application operates with deterministic fixtures and play money only.**
 
-### Slice 04 — settlement + payout/refund + history
+## Current implementation
 
-- `src/settlement/`: versioned, idempotent settlement for WON / LOST / VOID /
-  PARTIAL_VOID outcomes.
-- Winning payouts and void refunds are committed in the same DB transaction as
-  settlement records and bet/leg terminal state.
-- Void legs drop out of multiple odds; all-void bets refund the stake.
-- Concurrent identical settlement is replay-safe and cannot double-credit.
-- Open/settled bet-history queries are available.
-- Result corrections/resettlement are intentionally **not** enabled yet: a newer
-  result version returns `RESETTLEMENT_REQUIRED` until correction accounting is
-  implemented explicitly.
+BTE has been built in eight verified slices:
 
-### Slice 05 — persisted betslip + booking codes
+1. **Sports domain + deterministic fixture provider**
+2. **Immutable wallet + double-entry ledger**
+3. **Atomic, idempotent bet placement**
+4. **Settlement + payout/refund + bet history**
+5. **Persisted betslip + booking/load codes**
+6. **Realtime market stream + SSE reconnect**
+7. **Responsive customer sportsbook UI**
+8. **Append-only result corrections + resettlement accounting**
 
-- `src/betslip/`: owned draft slips, persisted stake/selections, same-market
-  replacement and identical-outcome toggle behavior.
-- Stored selections are revalidated against the current provider quote before
-  placement; price changes require explicit acceptance and suspended/unavailable
-  legs block preparation.
-- `prepareForPlacement` bridges a clean persisted slip into Slice 03 while Slice
-  03 still performs the authoritative placement-time recheck.
-- Booking codes are 12-character cryptographically generated human-safe tokens
-  backed by immutable JSON snapshots, TTLs and atomic max-use counters.
-- Loading a code never reserves historical odds: current prices are returned and
-  changed/suspended/unavailable legs are surfaced explicitly.
-- Importing a booking persists current available quotes; loading/importing a code
-  never places a bet or moves ledger value.
-- Cross-user slip access is rejected, including before a booking-code use can be
-  consumed.
+See [SPORTSBOOK_MASTER_PLAN.md](SPORTSBOOK_MASTER_PLAN.md) for the detailed implementation roadmap and remaining product work.
 
-### Slice 06 — canonical realtime stream + SSE reconnect
+## Quick start
 
-- `src/realtime/`: monotonic canonical realtime hub with price, market state,
-  event state, clock/period, score and cards/corners ticks.
-- Per-entity versions reject stale/duplicate updates before they enter the stream;
-  global sequence numbers provide reconnect ordering.
-- Bounded in-memory replay supports `Last-Event-ID`; clients outside the retained
-  journal receive an authoritative snapshot instead of replaying stale data.
-- `RealtimeClientState` rejects sequence gaps and stale entity versions.
-- `RealtimeOverlayProvider` feeds accepted realtime state back into the same
-  `SportsProvider` contract consumed by betslip and bet placement, preventing
-  browser-stream odds from diverging from transaction-time authority.
-- `RealtimeSseGateway` is an actual Node HTTP `text/event-stream` endpoint with
-  replay cursors, snapshot resync, heartbeat, bootstrap-race protection and
-  response backpressure buffering.
-- The deterministic fixture feed emits price → suspend → clock → score →
-  cards/corners → reopen cycles for repeatable QA.
-- Live suspension reaches connected client state in the same published tick;
-  reconnect tests prove missed events cannot regress quotes or market state.
+### Requirements
 
-### Slice 07 — customer sportsbook web UI + responsive design system
+- Node.js 24
+- pnpm 11
+- PostgreSQL
 
-- React 19 + Vite customer application in `web/`, backed by the real verified
-  sportsbook services through a thin Node HTTP API in `src/app/`.
-- Customer routes cover sports/highlights, live, My Bets, results, promotions,
-  games placeholder and help; the desktop shell includes sport navigation,
-  competition filtering, event/odds rows and a sticky betslip.
-- Realtime SSE updates drive live clocks/scores/stats, odds flashes and suspended
-  trading states directly in the rendered UI.
-- Persisted betslip flows are wired end-to-end: select/replace odds, persist stake,
-  explicit changed-price acceptance, book/load codes and clear.
-- Placement bridges through the existing Slice 03 transaction engine; accepted
-  bets render an immutable receipt with both `betRef` and the ledger transaction
-  reference `txnRef`.
-- The receipt migration backfills historical bets from their immutable `BET`
-  ledger transaction before enforcing the new unique non-null `txnRef`.
-- Responsive QA was performed at 1440 desktop, 390 mobile and the 320px floor.
-  Mobile uses a bottom navigation + betslip sheet and 44px touch targets for core
-  odds/tab actions.
-- A real browser smoke flow verified odd selection → mobile slip → ₦10 stake →
-  accepted receipt, and an HTTP integration test verifies bootstrap → slip →
-  placement → receipt → open-history.
-- Production builds emit `web-dist/`; generated assets are ignored from Git and
-  the Node customer server serves the built SPA with API/SSE routes.
+Direct application dependencies are pinned in `package.json` and `pnpm-lock.yaml`.
 
-### Slice 08 — result corrections + resettlement accounting
+### 1. Configure PostgreSQL
 
-- Settlement results are append-only revisions: a higher `resultVersion`
-  supersedes the latest settlement without mutating historical settlement rows.
-- Each revision records the full corrected entitlement, the signed adjustment
-  versus the immediately previous revision, and the settlement it supersedes.
-- Prior awards/refunds are reversed with immutable double-entry
-  `SETTLEMENT_REVERSAL` transactions before the corrected entitlement becomes
-  authoritative.
-- Corrections preserve source-account semantics: prior stake refunds reverse
-  against the stake pool; prior win credits reverse against the play-money mint.
-- Replays and concurrent identical corrections are idempotent; stale result
-  versions are rejected.
-- Authoritative corrections can claw back already-spent winnings into the existing
-  signed derived balance and can settle a previously accepted bet even after the
-  wallet is frozen. Ordinary funding/stake writes still reject frozen or
-  insufficient accounts.
-- The ledger's negative/frozen-account escape hatches are runtime-restricted to
-  settlement/resettlement transaction kinds/ref types; ordinary callers cannot opt
-  into them.
-- `listSettlementRevisions()` exposes the audit chain while bet history continues
-  to project only the latest authoritative settlement.
-- The Slice 08 migration was verified both from a clean migration replay and
-  against an isolated pre-Slice-08 database containing a historical settlement;
-  historical first revisions backfill `adjustmentMinor = creditMinor`.
+After cloning the repository:
 
-Current verification gate: **86 tests**, plus core/web typecheck, lint,
-production build and a clean seven-migration Prisma replay.
+```bash
+cp env.example .env
+```
 
-## Transaction / realtime docs consulted
+The default example expects a local PostgreSQL database named `bte_dev`. Adjust `DATABASE_URL` in `.env` for your environment.
 
-The transaction/concurrency implementation was checked against current Prisma ORM
-v6 documentation on 26 Sept 2026:
+### 2. Install and migrate
 
-- Prisma transactions / isolation levels / P2034 retry guidance
-- Prisma v6 error reference, including P2010 raw-query errors
-- Prisma raw SQL documentation
+```bash
+pnpm install
+pnpm run db:migrate
+```
 
-The realtime gateway was checked against current Node.js 24 HTTP documentation and
-the browser SSE/EventSource event-stream format on 27 Sept 2026:
+### 3. Start the API and realtime fixture feed
 
-- Node.js v24 `node:http` server / `ServerResponse.write()` behavior
-- SSE `text/event-stream` framing, named `event:`, `data:`, `id:`, reconnect
-  semantics and comment heartbeats
-- Browser `EventSource` one-way connection/reconnect model
+```bash
+pnpm run dev:api
+```
 
-See `SPORTSBOOK_MASTER_PLAN.md` for remaining product phases.
+By default the API listens on:
 
-## Maintenance note
+```text
+http://127.0.0.1:4100
+```
 
-`eslint@9.39.5` is the version already installed and is now pinned for
-reproducibility, but pnpm reports that release as unsupported upstream. Upgrade it
-in a dedicated tooling-maintenance change rather than mixing it into sportsbook
-domain work.
+Startup creates the deterministic demo context and idempotently grants the demo user **₦50,000 in play money**.
+
+### 4. Start the customer sportsbook
+
+In a second terminal:
+
+```bash
+pnpm run dev:web
+```
+
+Open:
+
+```text
+http://127.0.0.1:5173
+```
+
+You can now select odds, persist stake, create/load booking codes, place a play-money bet, inspect the receipt, follow realtime updates, and view open/settled bets.
+
+## Production-style local build
+
+```bash
+pnpm run build
+pnpm start
+```
+
+The Node server serves the compiled customer SPA from `web-dist/` together with the API and SSE endpoint.
+
+## Demo workflow
+
+A typical BTE transaction path is:
+
+```text
+fixture catalogue
+  → select outcome
+  → persisted betslip
+  → authoritative quote reconciliation
+  → explicit changed-price acceptance when required
+  → prepare placement
+  → server revalidates event/market/outcome/price
+  → lock wallet / verify funds
+  → ledger stake debit + accepted bet in one transaction
+  → immutable receipt
+  → settlement
+  → payout/refund
+  → optional later result correction
+  → reversal + corrected entitlement
+  → audit/history
+```
+
+Booking codes are snapshots, **not price reservations**. Loading a code re-queries current authoritative state and surfaces changed, suspended, or unavailable selections.
+
+## Repository layout
+
+```text
+src/
+  app/          customer API + server
+  betting/      atomic bet placement
+  betslip/      persisted slips + booking codes
+  realtime/     canonical stream, client state, SSE
+  settlement/   settlement + append-only corrections
+  sports/       canonical sports domain + fixture provider
+  wallet/       money primitives + immutable ledger
+
+web/
+  src/          React customer sportsbook
+
+prisma/
+  schema.prisma
+  migrations/
+
+tests/
+  domain, concurrency, realtime and HTTP integration tests
+
+docs/research/
+  normalized product/architecture research and open questions
+```
+
+## Betting engine
+
+The placement engine does not accept a browser-supplied quote as truth.
+
+For every submitted leg it resolves the current event, market, outcome and price from the server-side provider contract. It verifies market state and expected price/version, snapshots the accepted quote, then commits stake accounting and bet persistence in one PostgreSQL transaction.
+
+Serializable transactions, row locking, uniqueness constraints, idempotency and bounded conflict retries protect duplicate submission and concurrent overspend paths.
+
+## Double-entry ledger
+
+BTE does not store a mutable wallet balance.
+
+Balances are derived from immutable ledger entries:
+
+```text
+balance = total credits - total debits
+```
+
+Financial transactions carry their own idempotency key, reference type, reference ID and balanced debit/credit entries.
+
+The ledger can participate in a caller-owned Prisma transaction, allowing domain state and its monetary effect to succeed or roll back together.
+
+## Realtime odds and market state
+
+The realtime subsystem publishes canonical price, market-state, event-state, score, clock, period and match-stat updates.
+
+Important properties include:
+
+- monotonically increasing global stream sequence;
+- per-entity versions;
+- stale/duplicate update rejection;
+- bounded replay history;
+- `Last-Event-ID` reconnect support;
+- authoritative snapshot fallback when a reconnect cursor is too old;
+- client-side sequence-gap detection;
+- a provider overlay that feeds accepted realtime state back into transaction-time validation.
+
+The customer UI uses this stream for live scores, price movement flashes and suspended trading states.
+
+## Settlement and result corrections
+
+Initial settlement supports:
+
+- **WON**
+- **LOST**
+- **VOID**
+- **PARTIAL_VOID**
+
+Void legs are removed from multiple odds. An all-void bet refunds the original stake.
+
+Result corrections do not mutate the previous settlement. A newer result version appends a new settlement revision, records which revision it supersedes, reverses the previous entitlement, and applies the corrected entitlement.
+
+This makes the accounting chain auditable even when a previously paid result is corrected after winnings have already been spent.
+
+## Testing
+
+Run the complete verification gate:
+
+```bash
+pnpm run typecheck
+pnpm run lint
+pnpm test
+pnpm run build
+pnpm exec prisma migrate status
+```
+
+The current repository has **86 automated tests** covering, among other things:
+
+- money safety;
+- provider normalization;
+- stale quote rejection;
+- duplicate placement;
+- concurrent wallet spending;
+- transaction rollback;
+- suspended markets;
+- booking-code limits;
+- realtime reconnect/gap behavior;
+- concurrent settlement;
+- partial voids;
+- result correction replay;
+- negative-balance clawback accounting;
+- HTTP customer flow from bootstrap through receipt/history.
+
+Migration work has also been verified by replaying the complete migration chain and testing the Slice 08 upgrade against an isolated database containing historical settlement data.
+
+## Runtime configuration
+
+| Variable | Required | Default | Purpose |
+|---|---:|---|---|
+| `DATABASE_URL` | yes | — | PostgreSQL connection string used by Prisma |
+| `HOST` | no | `127.0.0.1` | Node customer server bind host |
+| `PORT` | no | `4100` | Node customer server port |
+| `REALTIME_TICK_MS` | no | `4000` | Deterministic realtime fixture interval; minimum 250 ms |
+
+Never commit production credentials. `.env` and `.env.*` are ignored.
+
+## What BTE intentionally does not include
+
+BTE is **not** a turnkey real-money betting operator.
+
+The public distribution does not provide:
+
+- a gambling licence or jurisdiction-specific legal approval;
+- production payment or withdrawal rails;
+- KYC/AML vendors;
+- production geofencing;
+- licensed commercial sports-data feeds;
+- certified casino/RNG content;
+- fraud/risk operations;
+- production secrets or operator infrastructure;
+- a claim that play-money defaults are sufficient for regulated real-money deployment.
+
+Future payment, identity, provider, risk and operator integrations should remain behind explicit interfaces and should not weaken the transaction/accounting invariants above.
+
+## Roadmap
+
+The eight core implementation slices are complete.
+
+Later product work includes:
+
+- cashout pricing/acceptance;
+- sandbox payment-provider integrations and reconciliation;
+- richer Singles / System / Bet Builder semantics;
+- promo/bonus mechanics;
+- authentication and account lifecycle;
+- KYC, responsible-gaming and compliance controls;
+- operator/admin tooling;
+- provider-backed games, virtuals and jackpot;
+- security/load/chaos hardening;
+- packaging and deployment improvements.
+
+See [SPORTSBOOK_MASTER_PLAN.md](SPORTSBOOK_MASTER_PLAN.md) for the source-of-truth roadmap.
+
+## Open-source licence
+
+BTE is licensed under the **GNU Affero General Public License version 3 only** (`AGPL-3.0-only`).
+
+See [LICENSE](LICENSE) for the complete licence text.
+
+The AGPL is a strong copyleft licence with network-use provisions. If you modify BTE and make that modified version available for users to interact with over a network, review the obligations in AGPL section 13, including corresponding-source availability.
+
+This README is a project overview, not legal advice.
+
+## Commercial licensing
+
+Organizations that require terms different from the AGPL may contact the copyright holder about a separate commercial licence.
+
+See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
+
+## Contributing
+
+External contributions are welcome once the project contribution/CLA process is published.
+
+Because BTE is intended to support both the AGPL community distribution and separate commercial licensing, significant external contributions will require an appropriate contributor agreement before they are merged.
+
+Until that process exists, please use discussions/issues for proposals rather than submitting substantial code contributions.
+
+## Copyright
+
+Copyright © 2026 **Princely Ondotimi**.
+
+See [NOTICE.md](NOTICE.md) for project notices.
