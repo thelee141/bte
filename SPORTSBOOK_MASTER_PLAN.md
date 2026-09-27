@@ -11,12 +11,12 @@ Real-money mode DISABLED until licensed. Dev = PLAY MONEY + sandbox.
 - [x] Slice 03 — atomic, idempotent server-authoritative bet placement
 - [x] Slice 04 — idempotent settlement, payout/refund, partial-void math, bet history
 - [x] Slice 05 — booking codes + persisted betslip lifecycle
-- [ ] Slice 06 — live/realtime stream + reconnect/stale-state guarantees
+- [x] Slice 06 — live/realtime stream + reconnect/stale-state guarantees
 - [ ] Slice 07 — customer sportsbook web UI + responsive design system
 - [ ] Later — explicit resettlement/corrections, cashout, sandbox payments, promos,
       accounts/RG/compliance/admin, games/virtuals/jackpot, hardening
 
-Current verified gate after Slice 05: 62/62 tests + typecheck + lint + build.
+Current verified gate after Slice 06: 76/76 tests + typecheck + lint + build.
 Real-money mode remains OFF.
 
 ## Phase 0 — Foundations & unknowns
@@ -42,9 +42,18 @@ Real-money mode remains OFF.
 
 ## Phase 2 — Live betting + real-time
 
-- [ ] WS/SSE gateway, price-version ticks, clock/score/period/cards metadata
-- [ ] Live rows: flash moves, suspend/lock overlay, stale/reconnect resync
-- [ ] Acceptance: kill-feed test shows suspend ≤1 tick; reconnect never uses stale quotes
+- [x] SSE gateway + canonical versioned realtime hub
+      - global monotonic stream sequence + per-entity versions
+      - price, market state, event state, clock/period, score, cards/corners
+      - bounded replay journal + authoritative snapshot fallback
+      - Last-Event-ID reconnect cursor + heartbeat + backpressure handling
+- [x] Realtime state feeds the same SportsProvider contract used by betslip/placement
+      - a price tick changes transaction-time authoritative price
+      - market suspension blocks betslip/placement through the overlay provider
+- [x] Client-state stale/gap protection + reconnect resync
+- [ ] Live-row visual flash moves + suspend/lock overlay (Slice 07 UI)
+- [x] Acceptance: connected client sees suspend in the published tick; reconnect
+      replay/snapshot never regresses price or market state
 
 ## Phase 3 — Betslip, booking, bet lifecycle
 
@@ -125,7 +134,6 @@ catalogue → placement → ledger debit → open bet → settlement → payout/
 
 Still required for MVP:
 - customer sportsbook UI
-- live/realtime delivery
 - explicit correction/resettlement
 - receipt surface + remaining Phase 3 acceptance work
 

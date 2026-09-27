@@ -92,9 +92,29 @@ Direct package versions are pinned in `package.json` and `pnpm-lock.yaml`.
 - Cross-user slip access is rejected, including before a booking-code use can be
   consumed.
 
-Current verification gate: **62 tests**, plus typecheck, lint and build.
+### Slice 06 — canonical realtime stream + SSE reconnect
 
-## Transaction docs consulted
+- `src/realtime/`: monotonic canonical realtime hub with price, market state,
+  event state, clock/period, score and cards/corners ticks.
+- Per-entity versions reject stale/duplicate updates before they enter the stream;
+  global sequence numbers provide reconnect ordering.
+- Bounded in-memory replay supports `Last-Event-ID`; clients outside the retained
+  journal receive an authoritative snapshot instead of replaying stale data.
+- `RealtimeClientState` rejects sequence gaps and stale entity versions.
+- `RealtimeOverlayProvider` feeds accepted realtime state back into the same
+  `SportsProvider` contract consumed by betslip and bet placement, preventing
+  browser-stream odds from diverging from transaction-time authority.
+- `RealtimeSseGateway` is an actual Node HTTP `text/event-stream` endpoint with
+  replay cursors, snapshot resync, heartbeat, bootstrap-race protection and
+  response backpressure buffering.
+- The deterministic fixture feed emits price → suspend → clock → score →
+  cards/corners → reopen cycles for repeatable QA.
+- Live suspension reaches connected client state in the same published tick;
+  reconnect tests prove missed events cannot regress quotes or market state.
+
+Current verification gate: **76 tests**, plus typecheck, lint and build.
+
+## Transaction / realtime docs consulted
 
 The transaction/concurrency implementation was checked against current Prisma ORM
 v6 documentation on 26 Sept 2026:
@@ -102,6 +122,14 @@ v6 documentation on 26 Sept 2026:
 - Prisma transactions / isolation levels / P2034 retry guidance
 - Prisma v6 error reference, including P2010 raw-query errors
 - Prisma raw SQL documentation
+
+The realtime gateway was checked against current Node.js 24 HTTP documentation and
+the browser SSE/EventSource event-stream format on 27 Sept 2026:
+
+- Node.js v24 `node:http` server / `ServerResponse.write()` behavior
+- SSE `text/event-stream` framing, named `event:`, `data:`, `id:`, reconnect
+  semantics and comment heartbeats
+- Browser `EventSource` one-way connection/reconnect model
 
 See `SPORTSBOOK_MASTER_PLAN.md` for remaining product phases.
 
