@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
+import { request as httpRequest } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createCustomerServer } from "../src/app/server.js";
 import type { ApiBootstrap, ApiReceipt } from "../src/app/contracts.js";
@@ -20,6 +21,32 @@ async function jsonRequest<T>(path: string, init?: RequestInit): Promise<{ statu
     status: response.status,
     body: (await response.json()) as T,
   };
+}
+
+async function rawGet(path: string): Promise<{ status: number; body: string }> {
+  const target = new URL(baseUrl);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        method: "GET",
+        path,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
+    req.once("error", reject);
+    req.end();
+  });
 }
 
 beforeAll(async () => {
@@ -127,5 +154,24 @@ describe("customer HTTP surface", () => {
       where: { idempotencyKey },
     });
     expect(stored?.txnRef).toBe(placed.body.receipt.txnRef);
+  });
+
+  it("rejects encoded traversal outside web-dist", async () => {
+    const response = await rawGet("/%2e%2e%2fpackage.json");
+
+    expect(response.status).toBe(400);
+    expect(response.body).toBe("Bad request");
+  });
+
+  it("sets baseline security headers on customer/API responses", async () => {
+    const response = await fetch(`${baseUrl}/api/bootstrap`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("permissions-policy")).toContain("camera=()");
+    expect(response.headers.get("content-security-policy")).toContain("default-src 'self'");
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'");
   });
 });

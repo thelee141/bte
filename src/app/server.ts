@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFile, stat } from "node:fs/promises";
-import { extname, join, normalize, resolve } from "node:path";
+import { extname, join, normalize, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createAppContext, type AppContext } from "./context.js";
 import { handleApiRequest } from "./api.js";
@@ -25,11 +25,33 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 function webPath(pathname: string): string | null {
-  const decoded = decodeURIComponent(pathname);
-  const relative = normalize(decoded).replace(/^[/\\]+/, "");
-  const candidate = resolve(WEB_DIST, relative);
-  if (!candidate.startsWith(WEB_DIST)) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return null;
+  }
+
+  const segments = decoded.replace(/\\/g, "/").split("/");
+  if (segments.includes("..")) return null;
+
+  const relativePath = normalize(decoded).replace(/^[/\\]+/, "");
+  const candidate = resolve(WEB_DIST, relativePath);
+  if (candidate !== WEB_DIST && !candidate.startsWith(`${WEB_DIST}${sep}`)) {
+    return null;
+  }
   return candidate;
+}
+
+function setSecurityHeaders(res: ServerResponse): void {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'",
+  );
 }
 
 async function fileExists(path: string): Promise<boolean> {
@@ -84,6 +106,8 @@ export async function createCustomerServer(context?: AppContext) {
   });
 
   const server = createServer(async (req, res) => {
+    setSecurityHeaders(res);
+
     try {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
 

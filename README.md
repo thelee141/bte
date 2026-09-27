@@ -287,7 +287,7 @@ pnpm run build
 pnpm exec prisma migrate status
 ```
 
-The current repository has **86 automated tests** covering, among other things:
+The current repository has **88 automated tests** covering, among other things:
 
 - money safety;
 - provider normalization;
@@ -302,9 +302,12 @@ The current repository has **86 automated tests** covering, among other things:
 - partial voids;
 - result correction replay;
 - negative-balance clawback accounting;
-- HTTP customer flow from bootstrap through receipt/history.
+- HTTP customer flow from bootstrap through receipt/history;
+- encoded static-path traversal rejection and baseline response security headers.
 
 Migration work has also been verified by replaying the complete migration chain and testing the Slice 08 upgrade against an isolated database containing historical settlement data.
+
+GitHub Actions CI is defined in `.github/workflows/ci.yml`. It provisions PostgreSQL, installs with a frozen pnpm lockfile, applies all migrations, checks migration status, typechecks, lints, runs the complete test suite, and produces the production build.
 
 ## Runtime configuration
 
@@ -370,13 +373,19 @@ Organizations that require terms different from the AGPL may contact the copyrig
 
 See [COMMERCIAL-LICENSE.md](COMMERCIAL-LICENSE.md).
 
+## Security
+
+Please do not report suspected vulnerabilities in public issues.
+
+See [SECURITY.md](SECURITY.md) for the supported reporting process and scope.
+
 ## Contributing
 
-External contributions are welcome once the project contribution/CLA process is published.
+External contributions are welcome under the process in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Because BTE is intended to support both the AGPL community distribution and separate commercial licensing, significant external contributions will require an appropriate contributor agreement before they are merged.
+Because BTE is intended to support both the AGPL community distribution and separate commercial licensing, significant external code contributions require acceptance of the [BTE Contributor Licence Agreement](CLA.md) before merge.
 
-Until that process exists, please use discussions/issues for proposals rather than submitting substantial code contributions.
+The CLA does not transfer ownership of a contributor's work; it grants the project the rights needed to distribute contributions under the AGPL community licence and separately negotiated commercial licences.
 
 ## Copyright
 
