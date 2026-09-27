@@ -74,7 +74,25 @@ Direct package versions are pinned in `package.json` and `pnpm-lock.yaml`.
   result version returns `RESETTLEMENT_REQUIRED` until correction accounting is
   implemented explicitly.
 
-Current verification gate: **50 tests**, plus typecheck, lint and build.
+### Slice 05 — persisted betslip + booking codes
+
+- `src/betslip/`: owned draft slips, persisted stake/selections, same-market
+  replacement and identical-outcome toggle behavior.
+- Stored selections are revalidated against the current provider quote before
+  placement; price changes require explicit acceptance and suspended/unavailable
+  legs block preparation.
+- `prepareForPlacement` bridges a clean persisted slip into Slice 03 while Slice
+  03 still performs the authoritative placement-time recheck.
+- Booking codes are 12-character cryptographically generated human-safe tokens
+  backed by immutable JSON snapshots, TTLs and atomic max-use counters.
+- Loading a code never reserves historical odds: current prices are returned and
+  changed/suspended/unavailable legs are surfaced explicitly.
+- Importing a booking persists current available quotes; loading/importing a code
+  never places a bet or moves ledger value.
+- Cross-user slip access is rejected, including before a booking-code use can be
+  consumed.
+
+Current verification gate: **62 tests**, plus typecheck, lint and build.
 
 ## Transaction docs consulted
 

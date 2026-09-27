@@ -10,13 +10,13 @@ Real-money mode DISABLED until licensed. Dev = PLAY MONEY + sandbox.
 - [x] Slice 02 — immutable play-money wallet + double-entry ledger
 - [x] Slice 03 — atomic, idempotent server-authoritative bet placement
 - [x] Slice 04 — idempotent settlement, payout/refund, partial-void math, bet history
-- [ ] Slice 05 — booking codes + persisted betslip lifecycle
+- [x] Slice 05 — booking codes + persisted betslip lifecycle
 - [ ] Slice 06 — live/realtime stream + reconnect/stale-state guarantees
 - [ ] Slice 07 — customer sportsbook web UI + responsive design system
 - [ ] Later — explicit resettlement/corrections, cashout, sandbox payments, promos,
       accounts/RG/compliance/admin, games/virtuals/jackpot, hardening
 
-Current verified gate after Slice 04: 50/50 tests + typecheck + lint + build.
+Current verified gate after Slice 05: 62/62 tests + typecheck + lint + build.
 Real-money mode remains OFF.
 
 ## Phase 0 — Foundations & unknowns
@@ -58,7 +58,18 @@ Real-money mode remains OFF.
 - [ ] Explicit bet-type layer: Singles / Multiple / System / Bet Builder
       - current placement engine accepts one or multiple independent legs
       - System and Builder semantics are NOT implemented yet
-- [ ] Book/load/share codes; receipt surface with betRef/txnRef
+- [x] Persisted server-side draft slips
+      - same outcome toggles off; same-market alternative replaces
+      - persisted stake + ownership boundaries
+      - reconcile current / changed / suspended / unavailable selections
+      - explicit accept-new-price step before preparation
+      - clean slip prepares Slice 03 expected price/version inputs
+- [x] Book/load/import/share-code backend
+      - cryptographically generated 12-character codes
+      - immutable slip snapshot + TTL + atomic max-use counters
+      - load/import always revalidates CURRENT prices
+      - booking code never reserves price, places a bet or moves ledger value
+- [ ] Receipt surface with betRef/txnRef
 - [ ] Cashout quotes/acceptance
 - [x] Settlement v1
       - WON / LOST / VOID / PARTIAL_VOID
@@ -114,10 +125,9 @@ catalogue → placement → ledger debit → open bet → settlement → payout/
 
 Still required for MVP:
 - customer sportsbook UI
-- betslip persistence/booking codes
 - live/realtime delivery
 - explicit correction/resettlement
-- remaining Phase 3 acceptance work
+- receipt surface + remaining Phase 3 acceptance work
 
 ## Production boundary (post Phase 7 + external gates)
 

@@ -389,3 +389,66 @@ model SettlementLeg {
   @@map("settlement_legs")
 }
 
+// --- Persisted betslip + booking-code subsystem (slice 05) ---
+
+model Betslip {
+  id         String   @id
+  userId     String
+  mode       String   @default("REAL")
+  state      String   @default("DRAFT")
+  currency   String   @default("NGN")
+  stakeMinor Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  selections   BetslipSelection[]
+  bookingCodes BookingCode[]
+
+  @@index([userId, state])
+  @@map("betslips")
+}
+
+model BetslipSelection {
+  id            String   @id
+  slipId        String
+  eventId       String
+  marketId      String
+  outcomeId     String
+  priceId       String
+  priceVersion  Int
+  decimalOdds   String
+  marketVersion Int
+  marketState   String
+  outcomeState  String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  slip Betslip @relation(fields: [slipId], references: [id], onDelete: Cascade)
+
+  @@unique([slipId, marketId])
+  @@unique([slipId, outcomeId])
+  @@index([slipId])
+  @@index([eventId])
+  @@map("betslip_selections")
+}
+
+model BookingCode {
+  id              String   @id
+  code            String   @unique
+  sourceSlipId    String?
+  createdByUserId String
+  snapshot        Json
+  priceBasis      String   @default("SNAPSHOT_AT_BOOKING")
+  expiresAt       DateTime
+  maxUses         Int      @default(100)
+  useCount        Int      @default(0)
+  createdAt       DateTime @default(now())
+  lastUsedAt      DateTime?
+
+  sourceSlip Betslip? @relation(fields: [sourceSlipId], references: [id], onDelete: SetNull)
+
+  @@index([createdByUserId, createdAt])
+  @@index([expiresAt])
+  @@map("booking_codes")
+}
+
