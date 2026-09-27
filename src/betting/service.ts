@@ -54,6 +54,7 @@ function generateBetRef(): string {
 type BetWithLegs = {
   id: string;
   betRef: string;
+  txnRef: string;
   userId: string;
   walletAccountId: string;
   idempotencyKey: string;
@@ -218,6 +219,7 @@ export class BettingService {
               data: {
                 id: betId,
                 betRef,
+                txnRef: ledgerTxnId,
                 userId: input.userId,
                 walletAccountId,
                 idempotencyKey: input.idempotencyKey,
@@ -447,6 +449,7 @@ export class BettingService {
     return {
       id: raw.id,
       betRef: raw.betRef,
+      txnRef: raw.txnRef,
       userId: raw.userId,
       walletAccountId: raw.walletAccountId,
       idempotencyKey: raw.idempotencyKey,

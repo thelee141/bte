@@ -306,6 +306,7 @@ model LedgerEntry {
 model Bet {
   id              String   @id
   betRef          String   @unique
+  txnRef          String   @unique
   userId          String
   walletAccountId String
   idempotencyKey  String   @unique

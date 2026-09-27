@@ -36,6 +36,7 @@ export interface AcceptedBetLeg {
 export interface AcceptedBet {
   readonly id: string;
   readonly betRef: string;
+  readonly txnRef: string;
   readonly userId: string;
   readonly walletAccountId: string;
   readonly idempotencyKey: string;

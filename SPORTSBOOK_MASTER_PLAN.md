@@ -12,11 +12,13 @@ Real-money mode DISABLED until licensed. Dev = PLAY MONEY + sandbox.
 - [x] Slice 04 — idempotent settlement, payout/refund, partial-void math, bet history
 - [x] Slice 05 — booking codes + persisted betslip lifecycle
 - [x] Slice 06 — live/realtime stream + reconnect/stale-state guarantees
-- [ ] Slice 07 — customer sportsbook web UI + responsive design system
+- [x] Slice 07 — customer sportsbook web UI + responsive design system
 - [ ] Later — explicit resettlement/corrections, cashout, sandbox payments, promos,
       accounts/RG/compliance/admin, games/virtuals/jackpot, hardening
 
-Current verified gate after Slice 06: 76/76 tests + typecheck + lint + build.
+All 7 numbered slices are implemented.
+Current verified gate after Slice 07: 77/77 tests + core/web typecheck + lint +
+production build, plus headed-browser desktop/mobile smoke QA.
 Real-money mode remains OFF.
 
 ## Phase 0 — Foundations & unknowns
@@ -24,7 +26,7 @@ Real-money mode remains OFF.
 - [x] Backend manifests created; exact current package versions pinned
 - [x] PostgreSQL + Prisma backend foundation established
 - [x] Prisma v6 transaction/error/raw-SQL docs checked for current concurrency behavior
-- [ ] Choose and pin the customer-web framework/design-system stack
+- [x] Customer web stack pinned: React 19.3 + Vite 8.3.1 + original CSS design system
 - [ ] Close OPEN_QUESTIONS 1–5 via re-audit (event detail, live, search, slip tabs, filters)
 - [ ] Close OPEN_QUESTIONS 6–11 via provider/help docs (games, jackpot, payments, loyalty)
 - [ ] Threat-model + RG/compliance review sign-off
@@ -34,11 +36,15 @@ Real-money mode remains OFF.
 
 ## Phase 1 — Public sportsbook (prematch) + design system
 
-- [ ] IA: home, sport listing, league page, livescore, results, promos, help/legal, footer
-- [ ] Components: header, sports nav, tree, league blocks, event rows, odds buttons, +N links
-- [ ] Responsive 320→1440 per RESPONSIVE_AUDIT principles; skeletons/empty/error states
+- [~] IA: home, live, results, promotions, help, My Bets and footer are rendered;
+      dedicated event-detail/livescore/legal routes remain later work
+- [x] Components: header, sports nav, competition rail, league blocks, event rows,
+      odds buttons, +N links, desktop betslip and mobile bottom navigation
+- [x] Responsive 320→1440 per RESPONSIVE_AUDIT principles; empty/loading/error
+      states plus 44px mobile touch targets on core controls
 - [x] Canonical catalogue + provider-adapter boundary + deterministic fixture feeds
-- Acceptance: fixture-driven pages render all routes; a11y + 44px targets; no provider IDs leak
+- Acceptance for Slice 07 customer shell: fixture-driven routes render, provider IDs
+  stay behind canonical contracts, and headed-browser QA covers desktop/mobile
 
 ## Phase 2 — Live betting + real-time
 
@@ -51,13 +57,16 @@ Real-money mode remains OFF.
       - a price tick changes transaction-time authoritative price
       - market suspension blocks betslip/placement through the overlay provider
 - [x] Client-state stale/gap protection + reconnect resync
-- [ ] Live-row visual flash moves + suspend/lock overlay (Slice 07 UI)
+- [x] Live-row visual price flashes + suspend/lock state in Slice 07 UI
 - [x] Acceptance: connected client sees suspend in the published tick; reconnect
       replay/snapshot never regresses price or market state
 
 ## Phase 3 — Betslip, booking, bet lifecycle
 
-- [ ] Client betslip state machine from BETSLIP_STATE_MACHINE.md
+- [x] Core customer betslip state machine from BETSLIP_STATE_MACHINE.md
+      - add/replace/toggle selection, persisted stake, blocked trading states
+      - explicit changed-price acceptance, submit/receipt, booking load/import
+      - advanced Singles/System/Builder semantics remain separate below
 - [x] Atomic placement from BET_LIFECYCLE.md
       - server-authoritative event/market/outcome/price validation
       - immutable accepted-price snapshots
@@ -78,7 +87,7 @@ Real-money mode remains OFF.
       - immutable slip snapshot + TTL + atomic max-use counters
       - load/import always revalidates CURRENT prices
       - booking code never reserves price, places a bet or moves ledger value
-- [ ] Receipt surface with betRef/txnRef
+- [x] Receipt surface with immutable betRef + ledger txnRef
 - [ ] Cashout quotes/acceptance
 - [x] Settlement v1
       - WON / LOST / VOID / PARTIAL_VOID
@@ -126,16 +135,22 @@ Real-money mode remains OFF.
 
 ## MVP boundary
 
-Target remains: prematch + live + slip/booking + play-money wallet + settlement
-on fixture feeds.
+The seven numbered slices now provide a working fixture-fed play-money MVP shell:
+prematch + live/realtime + persisted slip/booking + wallet + placement + settlement
++ history + customer web UI + immutable receipt references.
 
-The backend transaction core now covers:
-catalogue → placement → ledger debit → open bet → settlement → payout/refund → history.
+The transaction/customer path now covers:
+catalogue → slip → quote reconciliation → placement → ledger debit → open bet →
+settlement → payout/refund → history/receipt.
 
-Still required for MVP:
-- customer sportsbook UI
-- explicit correction/resettlement
-- receipt surface + remaining Phase 3 acceptance work
+Still required before Phase 3 is fully complete / the broader product can be
+treated as launch-ready:
+- explicit correction/resettlement accounting
+- Singles/System/Bet Builder product semantics beyond the current simple
+  single-or-multiple independent-leg engine
+- cashout quotes/acceptance
+- dedicated event-detail/livescore/legal surfaces and remaining audited unknowns
+- later payment/KYC/RG/admin/security/compliance work below
 
 ## Production boundary (post Phase 7 + external gates)
 

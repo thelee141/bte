@@ -2,7 +2,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/", "node_modules/", "prisma/migrations/"],
+    ignores: ["dist/", "web-dist/", "node_modules/", "prisma/migrations/"],
   },
   ...tseslint.configs.recommended,
   {
@@ -10,6 +10,19 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-explicit-any": "error",
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+    },
+  },
+  {
+    files: ["web/**/*.ts", "web/**/*.tsx", "vite.config.ts"],
+    languageOptions: {
+      parserOptions: {
+        project: "./tsconfig.web.json",
         tsconfigRootDir: import.meta.dirname,
       },
     },

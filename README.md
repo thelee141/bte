@@ -7,7 +7,7 @@ sports data and PLAY MONEY only.
 
 ## Runtime and tooling
 
-Verified 26 Sept 2026:
+Verified 27 Sept 2026:
 
 | Tool | Version |
 |---|---:|
@@ -15,6 +15,8 @@ Verified 26 Sept 2026:
 | pnpm | 11.22.0 |
 | TypeScript | 5.9.3 |
 | Prisma / @prisma/client | 6.19.3 |
+| React / React DOM | 19.3.0 |
+| Vite | 8.3.1 |
 | Vitest | 3.2.7 |
 | ESLint | 9.39.5 |
 | PostgreSQL | local `bte_dev` database |
@@ -26,10 +28,13 @@ Direct package versions are pinned in `package.json` and `pnpm-lock.yaml`.
 | Purpose | Command |
 |---|---|
 | install | `pnpm install` |
+| API dev server | `pnpm run dev:api` |
+| customer web dev server | `pnpm run dev:web` |
 | typecheck | `pnpm run typecheck` |
 | lint | `pnpm run lint` |
 | test | `pnpm test` |
-| build | `pnpm run build` |
+| production build | `pnpm run build` |
+| serve built customer app + API | `pnpm start` |
 | migrate | `pnpm run db:migrate` |
 | Prisma generate | `pnpm run db:generate` |
 
@@ -112,7 +117,33 @@ Direct package versions are pinned in `package.json` and `pnpm-lock.yaml`.
 - Live suspension reaches connected client state in the same published tick;
   reconnect tests prove missed events cannot regress quotes or market state.
 
-Current verification gate: **76 tests**, plus typecheck, lint and build.
+### Slice 07 — customer sportsbook web UI + responsive design system
+
+- React 19 + Vite customer application in `web/`, backed by the real verified
+  sportsbook services through a thin Node HTTP API in `src/app/`.
+- Customer routes cover sports/highlights, live, My Bets, results, promotions,
+  games placeholder and help; the desktop shell includes sport navigation,
+  competition filtering, event/odds rows and a sticky betslip.
+- Realtime SSE updates drive live clocks/scores/stats, odds flashes and suspended
+  trading states directly in the rendered UI.
+- Persisted betslip flows are wired end-to-end: select/replace odds, persist stake,
+  explicit changed-price acceptance, book/load codes and clear.
+- Placement bridges through the existing Slice 03 transaction engine; accepted
+  bets render an immutable receipt with both `betRef` and the ledger transaction
+  reference `txnRef`.
+- The receipt migration backfills historical bets from their immutable `BET`
+  ledger transaction before enforcing the new unique non-null `txnRef`.
+- Responsive QA was performed at 1440 desktop, 390 mobile and the 320px floor.
+  Mobile uses a bottom navigation + betslip sheet and 44px touch targets for core
+  odds/tab actions.
+- A real browser smoke flow verified odd selection → mobile slip → ₦10 stake →
+  accepted receipt, and an HTTP integration test verifies bootstrap → slip →
+  placement → receipt → open-history.
+- Production builds emit `web-dist/`; generated assets are ignored from Git and
+  the Node customer server serves the built SPA with API/SSE routes.
+
+Current verification gate: **77 tests**, plus core/web typecheck, lint and
+production build.
 
 ## Transaction / realtime docs consulted
 

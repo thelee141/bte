@@ -491,6 +491,14 @@ export class FixtureSportsProvider implements SportsProvider {
     return this.catalogue.sports.map((s) => ({ ...s }));
   }
 
+  async listCategories(): Promise<CanonicalCategory[]> {
+    return this.catalogue.categories.map((category) => ({ ...category }));
+  }
+
+  async listCompetitions(): Promise<CanonicalCompetition[]> {
+    return this.catalogue.competitions.map((competition) => ({ ...competition }));
+  }
+
   async listEvents(filter?: EventFilter): Promise<CanonicalEvent[]> {
     let evs = this.catalogue.events;
 
