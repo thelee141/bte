@@ -25,8 +25,15 @@ export interface SettledBet {
   readonly resultVersion: number;
   readonly source: string;
   readonly outcome: BetSettlementOutcome;
+  /** Full entitlement under this result revision. */
   readonly creditMinor: number;
+  /** Difference from the immediately superseded entitlement. */
+  readonly adjustmentMinor: number;
+  /** Full award/refund transaction for this revision, when creditMinor > 0. */
   readonly ledgerTxnId: string | null;
+  /** Reversal of the immediately superseded revision's full credit. */
+  readonly reversalLedgerTxnId: string | null;
+  readonly supersedesSettlementId: string | null;
   readonly createdAt: Date;
   readonly legs: ReadonlyArray<SettledLeg>;
 }

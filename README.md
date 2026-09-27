@@ -142,8 +142,34 @@ Direct package versions are pinned in `package.json` and `pnpm-lock.yaml`.
 - Production builds emit `web-dist/`; generated assets are ignored from Git and
   the Node customer server serves the built SPA with API/SSE routes.
 
-Current verification gate: **77 tests**, plus core/web typecheck, lint and
-production build.
+### Slice 08 — result corrections + resettlement accounting
+
+- Settlement results are append-only revisions: a higher `resultVersion`
+  supersedes the latest settlement without mutating historical settlement rows.
+- Each revision records the full corrected entitlement, the signed adjustment
+  versus the immediately previous revision, and the settlement it supersedes.
+- Prior awards/refunds are reversed with immutable double-entry
+  `SETTLEMENT_REVERSAL` transactions before the corrected entitlement becomes
+  authoritative.
+- Corrections preserve source-account semantics: prior stake refunds reverse
+  against the stake pool; prior win credits reverse against the play-money mint.
+- Replays and concurrent identical corrections are idempotent; stale result
+  versions are rejected.
+- Authoritative corrections can claw back already-spent winnings into the existing
+  signed derived balance and can settle a previously accepted bet even after the
+  wallet is frozen. Ordinary funding/stake writes still reject frozen or
+  insufficient accounts.
+- The ledger's negative/frozen-account escape hatches are runtime-restricted to
+  settlement/resettlement transaction kinds/ref types; ordinary callers cannot opt
+  into them.
+- `listSettlementRevisions()` exposes the audit chain while bet history continues
+  to project only the latest authoritative settlement.
+- The Slice 08 migration was verified both from a clean migration replay and
+  against an isolated pre-Slice-08 database containing a historical settlement;
+  historical first revisions backfill `adjustmentMinor = creditMinor`.
+
+Current verification gate: **86 tests**, plus core/web typecheck, lint,
+production build and a clean seven-migration Prisma replay.
 
 ## Transaction / realtime docs consulted
 

@@ -5,7 +5,13 @@ export type LedgerTx = Prisma.TransactionClient;
 
 export type WalletAccountKind = "REAL" | "BONUS";
 
-export type LedgerKind = "PLAY_GRANT" | "STAKE_RESERVE" | "WIN_CREDIT" | "STAKE_REFUND" | "ADJUSTMENT";
+export type LedgerKind =
+  | "PLAY_GRANT"
+  | "STAKE_RESERVE"
+  | "WIN_CREDIT"
+  | "STAKE_REFUND"
+  | "SETTLEMENT_REVERSAL"
+  | "ADJUSTMENT";
 
 export type WalletErrorCode =
   | "INSUFFICIENT_FUNDS"
@@ -73,9 +79,25 @@ export interface PostInput {
   }>;
 }
 
+export interface LedgerPostOptions {
+  readonly tx?: LedgerTx;
+  /**
+   * Internal accounting escape hatch for authoritative corrections that must
+   * claw back a prior credit even when the account has since spent it.
+   * Ordinary customer/stake debits must never populate this list.
+   */
+  readonly allowNegativeDebitAccountIds?: readonly string[];
+  /**
+   * Internal operator-side settlement/correction writes may still need to
+   * credit or claw back an already-accepted bet after the customer account is
+   * frozen. Ordinary customer-initiated writes must never populate this list.
+   */
+  readonly allowFrozenAccountIds?: readonly string[];
+}
+
 export interface LedgerServiceShape {
   createAccount(userId: string, kind: WalletAccountKind, currency?: string): Promise<WalletAccount>;
   getBalance(accountId: string, opts?: { tx?: LedgerTx }): Promise<SignedMinorUnits>;
-  post(input: PostInput, opts?: { tx?: LedgerTx }): Promise<LedgerTransaction>;
+  post(input: PostInput, opts?: LedgerPostOptions): Promise<LedgerTransaction>;
   listTransactions(accountId: string, opts?: { limit?: number }): Promise<LedgerTransaction[]>;
 }

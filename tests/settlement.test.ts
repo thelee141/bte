@@ -268,7 +268,133 @@ describe("settlement engine", () => {
     ).rejects.toMatchObject({ code: "INVALID_LEG_RESULT" });
   });
 
-  it("rejects a higher result version until explicit resettlement support is invoked", async () => {
+  it("resettles WON to LOST by appending a revision and reversing the full prior award", async () => {
+    const userId = await setupUserWithBalance("100.00");
+    const bet = await placeFixtureBet(userId);
+
+    const first = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 1,
+      source: "fixture-result",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
+    });
+
+    const corrected = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 2,
+      source: "fixture-correction",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "LOST" }],
+    });
+
+    expect(corrected.outcome).toBe("LOST");
+    expect(corrected.creditMinor).toBe(0);
+    expect(corrected.adjustmentMinor).toBe(-bet.potentialWinMinor);
+    expect(corrected.ledgerTxnId).toBeNull();
+    expect(corrected.reversalLedgerTxnId).not.toBeNull();
+    expect(corrected.supersedesSettlementId).toBe(first.settlementId);
+    expect(await userBalance(userId)).toBe(9000);
+
+    const reversal = await prisma.ledgerTransaction.findUnique({
+      where: { id: corrected.reversalLedgerTxnId ?? "" },
+      include: { entries: true },
+    });
+    expect(reversal?.kind).toBe("SETTLEMENT_REVERSAL");
+    expect(reversal?.refType).toBe("BET_RESETTLEMENT_REVERSAL");
+    expect(reversal?.entries.some((entry) => entry.accountId === "system_play_mint" && entry.creditMinor === bet.potentialWinMinor)).toBe(true);
+
+    const revisions = await settlement.listSettlementRevisions(bet.id);
+    expect(revisions).toHaveLength(2);
+    expect(revisions[0]).toMatchObject({
+      settlementId: first.settlementId,
+      resultVersion: 1,
+      outcome: "WON",
+      creditMinor: bet.potentialWinMinor,
+    });
+    expect(revisions[1]).toMatchObject({
+      settlementId: corrected.settlementId,
+      resultVersion: 2,
+      outcome: "LOST",
+      supersedesSettlementId: first.settlementId,
+    });
+
+    const storedBet = await prisma.bet.findUnique({
+      where: { id: bet.id },
+      include: { legs: true },
+    });
+    expect(storedBet?.legs[0].status).toBe("LOST");
+
+    const history = await settlement.listBetHistory(userId, { state: "SETTLED" });
+    expect(history[0].settlement).toMatchObject({
+      resultVersion: 2,
+      outcome: "LOST",
+      creditMinor: 0,
+    });
+  });
+
+  it("resettles LOST to WON by awarding the corrected full entitlement", async () => {
+    const userId = await setupUserWithBalance("100.00");
+    const bet = await placeFixtureBet(userId);
+
+    const first = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 1,
+      source: "fixture-result",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "LOST" }],
+    });
+
+    const corrected = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 2,
+      source: "fixture-correction",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
+    });
+
+    expect(corrected.outcome).toBe("WON");
+    expect(corrected.creditMinor).toBe(bet.potentialWinMinor);
+    expect(corrected.adjustmentMinor).toBe(bet.potentialWinMinor);
+    expect(corrected.ledgerTxnId).not.toBeNull();
+    expect(corrected.reversalLedgerTxnId).toBeNull();
+    expect(corrected.supersedesSettlementId).toBe(first.settlementId);
+    expect(await userBalance(userId)).toBe(9000 + bet.potentialWinMinor);
+  });
+
+  it("preserves source-account semantics when correcting VOID to WON", async () => {
+    const userId = await setupUserWithBalance("100.00");
+    const bet = await placeFixtureBet(userId);
+
+    const first = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 1,
+      source: "fixture-result",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "VOID" }],
+    });
+    expect(await userBalance(userId)).toBe(10000);
+
+    const corrected = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 2,
+      source: "fixture-correction",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
+    });
+
+    expect(corrected.adjustmentMinor).toBe(bet.potentialWinMinor - bet.stakeMinor);
+    expect(await userBalance(userId)).toBe(9000 + bet.potentialWinMinor);
+
+    const award = await prisma.ledgerTransaction.findUnique({
+      where: { id: corrected.ledgerTxnId ?? "" },
+      include: { entries: true },
+    });
+    const reversal = await prisma.ledgerTransaction.findUnique({
+      where: { id: corrected.reversalLedgerTxnId ?? "" },
+      include: { entries: true },
+    });
+
+    expect(award?.entries.some((entry) => entry.accountId === "system_play_mint" && entry.debitMinor === bet.potentialWinMinor)).toBe(true);
+    expect(reversal?.entries.some((entry) => entry.accountId === "system_stake_pool" && entry.creditMinor === bet.stakeMinor)).toBe(true);
+    expect(corrected.supersedesSettlementId).toBe(first.settlementId);
+  });
+
+  it("replays the same correction idempotently without duplicating reversal or award effects", async () => {
     const userId = await setupUserWithBalance("100.00");
     const bet = await placeFixtureBet(userId);
 
@@ -279,14 +405,174 @@ describe("settlement engine", () => {
       legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
     });
 
+    const input = {
+      betId: bet.id,
+      resultVersion: 2,
+      source: "fixture-correction",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "VOID" as const }],
+    };
+
+    const first = await settlement.settleBet(input);
+    const balance = await userBalance(userId);
+    const replay = await settlement.settleBet(input);
+
+    expect(replay.settlementId).toBe(first.settlementId);
+    expect(replay.ledgerTxnId).toBe(first.ledgerTxnId);
+    expect(replay.reversalLedgerTxnId).toBe(first.reversalLedgerTxnId);
+    expect(await userBalance(userId)).toBe(balance);
+    expect(await prisma.settlement.count({ where: { betId: bet.id } })).toBe(2);
+    expect(
+      await prisma.ledgerTransaction.count({
+        where: {
+          idempotencyKey: {
+            startsWith: `resettlement_${bet.id}_2_`,
+          },
+        },
+      }),
+    ).toBe(2);
+  });
+
+  it("rejects a result version older than the latest revision", async () => {
+    const userId = await setupUserWithBalance("100.00");
+    const bet = await placeFixtureBet(userId);
+
+    await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 1,
+      source: "fixture-result",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
+    });
+    await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 3,
+      source: "fixture-correction-v3",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "LOST" }],
+    });
+
     await expect(
       settlement.settleBet({
         betId: bet.id,
         resultVersion: 2,
-        source: "fixture-correction",
-        legs: [{ betLegId: bet.legs[0].id, outcome: "LOST" }],
+        source: "late-provider-result",
+        legs: [{ betLegId: bet.legs[0].id, outcome: "VOID" }],
       }),
-    ).rejects.toMatchObject({ code: "RESETTLEMENT_REQUIRED" });
+    ).rejects.toMatchObject({ code: "STALE_RESULT_VERSION" });
+
+    expect(await prisma.settlement.count({ where: { betId: bet.id } })).toBe(2);
+  });
+
+  it("handles concurrent identical corrections without duplicate accounting effects", async () => {
+    const userId = await setupUserWithBalance("100.00");
+    const bet = await placeFixtureBet(userId);
+
+    await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 1,
+      source: "fixture-result",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
+    });
+
+    const input = {
+      betId: bet.id,
+      resultVersion: 2,
+      source: "fixture-correction",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "LOST" as const }],
+    };
+
+    const [first, second] = await Promise.all([
+      settlement.settleBet(input),
+      settlement.settleBet(input),
+    ]);
+
+    expect(first.settlementId).toBe(second.settlementId);
+    expect(first.reversalLedgerTxnId).toBe(second.reversalLedgerTxnId);
+    expect(await userBalance(userId)).toBe(9000);
+    expect(await prisma.settlement.count({ where: { betId: bet.id } })).toBe(2);
+    expect(
+      await prisma.ledgerTransaction.count({
+        where: {
+          idempotencyKey: `resettlement_${bet.id}_2_reverse_1`,
+        },
+      }),
+    ).toBe(1);
+  });
+
+  it("can claw back spent winnings into a signed negative balance without weakening ordinary debits", async () => {
+    const userId = await setupUserWithBalance("10.00");
+    const bet = await placeFixtureBet(userId);
+
+    await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 1,
+      source: "fixture-result",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
+    });
+
+    await funding.debitStake({
+      userId,
+      amount: toMinorUnits((bet.potentialWinMinor / 100).toFixed(2)),
+      betRef: `spend_${randomUUID()}`,
+      idempotencyKey: uniqueKey("spend"),
+    });
+    expect(await userBalance(userId)).toBe(0);
+
+    const corrected = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 2,
+      source: "fixture-correction",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "LOST" }],
+    });
+
+    expect(corrected.adjustmentMinor).toBe(-bet.potentialWinMinor);
+    expect(await userBalance(userId)).toBe(-bet.potentialWinMinor);
+
+    await expect(
+      funding.debitStake({
+        userId,
+        amount: toMinorUnits("1.00"),
+        betRef: `ordinary_${randomUUID()}`,
+        idempotencyKey: uniqueKey("ordinary"),
+      }),
+    ).rejects.toMatchObject({ code: "INSUFFICIENT_FUNDS" });
+  });
+
+  it("allows authoritative settlement corrections on a frozen customer wallet", async () => {
+    const userId = await setupUserWithBalance("100.00");
+    const bet = await placeFixtureBet(userId);
+    const wallet = await prisma.walletAccount.findFirst({
+      where: { userId, kind: "REAL", currency: "NGN" },
+    });
+    if (!wallet) throw new Error("user wallet missing");
+
+    await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 1,
+      source: "fixture-result",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "LOST" }],
+    });
+
+    await prisma.walletAccount.update({
+      where: { id: wallet.id },
+      data: { frozen: true },
+    });
+
+    const corrected = await settlement.settleBet({
+      betId: bet.id,
+      resultVersion: 2,
+      source: "fixture-correction",
+      legs: [{ betLegId: bet.legs[0].id, outcome: "WON" }],
+    });
+
+    expect(corrected.creditMinor).toBe(bet.potentialWinMinor);
+    expect(await userBalance(userId)).toBe(9000 + bet.potentialWinMinor);
+
+    await expect(
+      funding.grantPlayMoney({
+        userId,
+        amount: toMinorUnits("1.00"),
+        idempotencyKey: uniqueKey("frozen-grant"),
+      }),
+    ).rejects.toMatchObject({ code: "ACCOUNT_FROZEN" });
   });
 
   it("handles concurrent identical settlement requests without double credit", async () => {

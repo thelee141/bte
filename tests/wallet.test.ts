@@ -306,4 +306,49 @@ describe("wallet ledger", () => {
     expect((rejected[0].reason as { code?: string }).code).toBe("INSUFFICIENT_FUNDS");
     expect(await ledger.getBalance(acc.id)).toBe(0);
   });
+
+  it("rejects negative-balance bypass outside authoritative settlement reversal", async () => {
+    const userId = uniqueUserId();
+    const acc = await ledger.createAccount(userId, "REAL", "NGN");
+
+    await expect(
+      ledger.post(
+        {
+          kind: "ADJUSTMENT",
+          idempotencyKey: `bad_negative_${randomUUID()}`,
+          currency: "NGN",
+          refType: "TEST",
+          refId: "bad-negative",
+          entries: [
+            { accountId: acc.id, debitMinor: toMinorUnits("1.00") },
+            { accountId: "system_play_mint", creditMinor: toMinorUnits("1.00") },
+          ],
+        },
+        { allowNegativeDebitAccountIds: [acc.id] },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_ENTRY" });
+  });
+
+  it("rejects frozen-account bypass outside authoritative settlement accounting", async () => {
+    const userId = uniqueUserId();
+    const acc = await ledger.createAccount(userId, "REAL", "NGN");
+    await prisma.walletAccount.update({ where: { id: acc.id }, data: { frozen: true } });
+
+    await expect(
+      ledger.post(
+        {
+          kind: "ADJUSTMENT",
+          idempotencyKey: `bad_frozen_${randomUUID()}`,
+          currency: "NGN",
+          refType: "TEST",
+          refId: "bad-frozen",
+          entries: [
+            { accountId: "system_play_mint", debitMinor: toMinorUnits("1.00") },
+            { accountId: acc.id, creditMinor: toMinorUnits("1.00") },
+          ],
+        },
+        { allowFrozenAccountIds: [acc.id] },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_ENTRY" });
+  });
 });

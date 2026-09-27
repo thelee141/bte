@@ -278,8 +278,9 @@ model LedgerTransaction {
   status         String   @default("POSTED")
   createdAt      DateTime @default(now())
 
-  entries     LedgerEntry[]
-  settlements Settlement[] @relation("SettlementLedgerTxn")
+  entries             LedgerEntry[]
+  settlementAwards    Settlement[] @relation("SettlementAwardLedgerTxn")
+  settlementReversals Settlement[] @relation("SettlementReversalLedgerTxn")
 
   @@index([refType, refId])
   @@map("ledger_transactions")
@@ -356,19 +357,25 @@ model BetLeg {
 // --- Settlement subsystem (slice 04) ---
 
 model Settlement {
-  id             String   @id
-  betId          String
-  resultVersion  Int
-  source         String
-  outcome        String
-  creditMinor    Int
-  decisionHash   String
-  ledgerTxnId    String?  @unique
-  createdAt      DateTime @default(now())
+  id                       String   @id
+  betId                    String
+  resultVersion            Int
+  source                   String
+  outcome                  String
+  creditMinor              Int
+  adjustmentMinor          Int      @default(0)
+  decisionHash             String
+  ledgerTxnId              String?  @unique
+  reversalLedgerTxnId      String?  @unique
+  supersedesSettlementId   String?  @unique
+  createdAt                DateTime @default(now())
 
-  bet       Bet                @relation(fields: [betId], references: [id], onDelete: Cascade)
-  ledgerTxn LedgerTransaction? @relation("SettlementLedgerTxn", fields: [ledgerTxnId], references: [id], onDelete: Restrict)
-  legs      SettlementLeg[]
+  bet            Bet                @relation(fields: [betId], references: [id], onDelete: Cascade)
+  ledgerTxn      LedgerTransaction? @relation("SettlementAwardLedgerTxn", fields: [ledgerTxnId], references: [id], onDelete: Restrict)
+  reversalTxn    LedgerTransaction? @relation("SettlementReversalLedgerTxn", fields: [reversalLedgerTxnId], references: [id], onDelete: Restrict)
+  supersedes     Settlement?        @relation("SettlementRevisionChain", fields: [supersedesSettlementId], references: [id], onDelete: Restrict)
+  supersededBy   Settlement?        @relation("SettlementRevisionChain")
+  legs           SettlementLeg[]
 
   @@unique([betId, resultVersion])
   @@index([betId, createdAt])

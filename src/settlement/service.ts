@@ -1,8 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Prisma, PrismaClient } from "@prisma/client";
 import { LedgerService } from "../wallet/ledger.js";
-import { calculatePotentialWin, parseOddsHundredths, validateMinorUnits, type MinorUnits } from "../wallet/money.js";
-import { WalletError } from "../wallet/types.js";
+import {
+  calculatePotentialWin,
+  parseOddsHundredths,
+  validateMinorUnits,
+  type MinorUnits,
+} from "../wallet/money.js";
+import { WalletError, type LedgerTx } from "../wallet/types.js";
 import { SettlementError } from "./errors.js";
 import type {
   BetHistoryItem,
@@ -24,8 +29,11 @@ type SettlementWithRelations = {
   source: string;
   outcome: string;
   creditMinor: number;
+  adjustmentMinor: number;
   decisionHash: string;
   ledgerTxnId: string | null;
+  reversalLedgerTxnId: string | null;
+  supersedesSettlementId: string | null;
   createdAt: Date;
   bet: {
     betRef: string;
@@ -76,17 +84,26 @@ function normalizeDecisions(legs: ReadonlyArray<LegSettlementDecision>): LegSett
   return normalized.sort((a, b) => a.betLegId.localeCompare(b.betLegId));
 }
 
-function hashDecision(input: { source: string; legs: ReadonlyArray<LegSettlementDecision> }): string {
+function hashDecision(input: {
+  source: string;
+  legs: ReadonlyArray<LegSettlementDecision>;
+}): string {
   return createHash("sha256")
     .update(JSON.stringify({ source: input.source, legs: input.legs }))
     .digest("hex");
 }
 
-function classifyOutcome(decisions: ReadonlyArray<LegSettlementDecision>): BetSettlementOutcome {
+function classifyOutcome(
+  decisions: ReadonlyArray<LegSettlementDecision>,
+): BetSettlementOutcome {
   if (decisions.every((leg) => leg.outcome === "VOID")) return "VOID";
   if (decisions.some((leg) => leg.outcome === "LOST")) return "LOST";
   if (decisions.some((leg) => leg.outcome === "VOID")) return "PARTIAL_VOID";
   return "WON";
+}
+
+function settlementSourceAccount(outcome: BetSettlementOutcome): string {
+  return outcome === "VOID" ? SYSTEM_STAKE_POOL_ID : SYSTEM_PLAY_MINT_ID;
 }
 
 function formatOddsHundredths(hundredths: number): string {
@@ -108,6 +125,30 @@ function productOddsHundredths(odds: ReadonlyArray<string>): number {
   return Number(total);
 }
 
+function computeCreditMinor(
+  bet: {
+    stakeMinor: number;
+    potentialWinMinor: number;
+    legs: Array<{ id: string; decimalOdds: string }>;
+  },
+  decisions: ReadonlyArray<LegSettlementDecision>,
+  outcome: BetSettlementOutcome,
+): number {
+  if (outcome === "LOST") return 0;
+  if (outcome === "VOID") return bet.stakeMinor;
+  if (outcome === "WON") return bet.potentialWinMinor;
+
+  const decisionMap = new Map(decisions.map((decision) => [decision.betLegId, decision.outcome]));
+  const survivingOdds = bet.legs
+    .filter((leg) => decisionMap.get(leg.id) === "WON")
+    .map((leg) => leg.decimalOdds);
+  const adjustedOdds = formatOddsHundredths(productOddsHundredths(survivingOdds));
+  return calculatePotentialWin(
+    validateMinorUnits(bet.stakeMinor) as MinorUnits,
+    adjustedOdds,
+  ) as number;
+}
+
 function mapSettlement(row: SettlementWithRelations): SettledBet {
   return {
     settlementId: row.id,
@@ -117,7 +158,10 @@ function mapSettlement(row: SettlementWithRelations): SettledBet {
     source: row.source,
     outcome: row.outcome as BetSettlementOutcome,
     creditMinor: row.creditMinor,
+    adjustmentMinor: row.adjustmentMinor,
     ledgerTxnId: row.ledgerTxnId,
+    reversalLedgerTxnId: row.reversalLedgerTxnId,
+    supersedesSettlementId: row.supersedesSettlementId,
     createdAt: row.createdAt,
     legs: row.legs
       .map((leg) => ({
@@ -140,7 +184,10 @@ export class SettlementService {
   async settleBet(input: SettleBetInput): Promise<SettledBet> {
     if (!input?.betId) throw new SettlementError("BET_NOT_FOUND", "betId is required");
     if (!Number.isInteger(input.resultVersion) || input.resultVersion < 1) {
-      throw new SettlementError("INVALID_RESULT_VERSION", "resultVersion must be an integer >= 1");
+      throw new SettlementError(
+        "INVALID_RESULT_VERSION",
+        "resultVersion must be an integer >= 1",
+      );
     }
     if (!input.source || typeof input.source !== "string") {
       throw new SettlementError("INVALID_SOURCE", "source is required");
@@ -149,18 +196,10 @@ export class SettlementService {
     const decisions = normalizeDecisions(input.legs);
     const decisionHash = hashDecision({ source: input.source, legs: decisions });
 
-    const existingOutside = await this.prisma.settlement.findUnique({
-      where: {
-        betId_resultVersion: {
-          betId: input.betId,
-          resultVersion: input.resultVersion,
-        },
-      },
-      include: { bet: { select: { betRef: true } }, legs: true },
-    });
+    const existingOutside = await this.findSettlement(input.betId, input.resultVersion);
     if (existingOutside) {
       this.assertReplayMatches(existingOutside.decisionHash, decisionHash, input);
-      return mapSettlement(existingOutside as SettlementWithRelations);
+      return mapSettlement(existingOutside);
     }
 
     for (let attempt = 1; attempt <= MAX_SERIALIZATION_RETRIES; attempt++) {
@@ -201,11 +240,11 @@ export class SettlementService {
               throw new SettlementError("BET_NOT_FOUND", `Bet ${input.betId} not found`);
             }
 
-            const latest = bet.settlements[0];
-            if (latest) {
+            const latest = bet.settlements[0] ?? null;
+            if (latest && input.resultVersion <= latest.resultVersion) {
               throw new SettlementError(
-                "RESETTLEMENT_REQUIRED",
-                `Bet ${bet.betRef} is already settled at result version ${latest.resultVersion}`,
+                "STALE_RESULT_VERSION",
+                `Result version ${input.resultVersion} is older than latest settlement version ${latest.resultVersion}`,
                 {
                   latestResultVersion: latest.resultVersion,
                   requestedResultVersion: input.resultVersion,
@@ -213,7 +252,9 @@ export class SettlementService {
               );
             }
 
-            const decisionMap = new Map(decisions.map((decision) => [decision.betLegId, decision.outcome]));
+            const decisionMap = new Map(
+              decisions.map((decision) => [decision.betLegId, decision.outcome]),
+            );
 
             for (const decision of decisions) {
               if (!bet.legs.some((leg) => leg.id === decision.betLegId)) {
@@ -233,65 +274,50 @@ export class SettlementService {
 
             for (const leg of bet.legs) {
               if (!decisionMap.has(leg.id)) {
-                throw new SettlementError("INCOMPLETE_RESULT", `Missing result for bet leg ${leg.id}`);
+                throw new SettlementError(
+                  "INCOMPLETE_RESULT",
+                  `Missing result for bet leg ${leg.id}`,
+                );
               }
             }
 
             const outcome = classifyOutcome(decisions);
-            let creditMinor = 0;
+            const creditMinor = computeCreditMinor(bet, decisions, outcome);
+            const previousCreditMinor = latest?.creditMinor ?? 0;
+            const adjustmentMinor = creditMinor - previousCreditMinor;
 
-            if (outcome === "VOID") {
-              creditMinor = bet.stakeMinor;
-            } else if (outcome === "WON") {
-              creditMinor = bet.potentialWinMinor;
-            } else if (outcome === "PARTIAL_VOID") {
-              const survivingOdds = bet.legs
-                .filter((leg) => decisionMap.get(leg.id) === "WON")
-                .map((leg) => leg.decimalOdds);
-              const adjustedOdds = formatOddsHundredths(productOddsHundredths(survivingOdds));
-              creditMinor = calculatePotentialWin(
-                validateMinorUnits(bet.stakeMinor) as MinorUnits,
-                adjustedOdds,
-              ) as number;
-            }
+            const awardLedgerTxnId = await this.postAward({
+              tx,
+              bet: {
+                id: bet.id,
+                betRef: bet.betRef,
+                walletAccountId: bet.walletAccountId,
+                currency: bet.currency,
+              },
+              resultVersion: input.resultVersion,
+              outcome,
+              creditMinor,
+              isRevision: latest !== null,
+            });
 
-            let ledgerTxnId: string | null = null;
-            if (creditMinor > 0) {
-              const sourceAccountId = outcome === "VOID" ? SYSTEM_STAKE_POOL_ID : SYSTEM_PLAY_MINT_ID;
-              await tx.walletAccount.upsert({
-                where: { id: sourceAccountId },
-                update: {},
-                create: {
-                  id: sourceAccountId,
-                  userId: sourceAccountId,
-                  kind: "REAL",
-                  currency: bet.currency,
-                  frozen: false,
-                },
-              });
-
-              const ledgerTxn = await this.ledger.post(
-                {
-                  kind: outcome === "VOID" ? "STAKE_REFUND" : "WIN_CREDIT",
-                  idempotencyKey: `settlement_${bet.id}_${input.resultVersion}`,
-                  currency: bet.currency,
-                  refType: "BET_SETTLEMENT",
-                  refId: bet.betRef,
-                  entries: [
-                    {
-                      accountId: sourceAccountId,
-                      debitMinor: validateMinorUnits(creditMinor),
+            const reversalLedgerTxnId =
+              latest && latest.creditMinor > 0
+                ? await this.postReversal({
+                    tx,
+                    bet: {
+                      id: bet.id,
+                      betRef: bet.betRef,
+                      walletAccountId: bet.walletAccountId,
+                      currency: bet.currency,
                     },
-                    {
-                      accountId: bet.walletAccountId,
-                      creditMinor: validateMinorUnits(creditMinor),
+                    resultVersion: input.resultVersion,
+                    previous: {
+                      resultVersion: latest.resultVersion,
+                      outcome: latest.outcome as BetSettlementOutcome,
+                      creditMinor: latest.creditMinor,
                     },
-                  ],
-                },
-                { tx },
-              );
-              ledgerTxnId = ledgerTxn.id;
-            }
+                  })
+                : null;
 
             const settlement = await tx.settlement.create({
               data: {
@@ -301,8 +327,11 @@ export class SettlementService {
                 source: input.source,
                 outcome,
                 creditMinor,
+                adjustmentMinor,
                 decisionHash,
-                ledgerTxnId,
+                ledgerTxnId: awardLedgerTxnId,
+                reversalLedgerTxnId,
+                supersedesSettlementId: latest?.id ?? null,
               },
             });
 
@@ -326,7 +355,7 @@ export class SettlementService {
               where: { id: bet.id },
               data: {
                 status: "SETTLED",
-                settledAt: new Date(),
+                settledAt: bet.settledAt ?? new Date(),
               },
             });
 
@@ -335,7 +364,10 @@ export class SettlementService {
               include: { bet: { select: { betRef: true } }, legs: true },
             });
             if (!complete) {
-              throw new SettlementError("SETTLEMENT_CONFLICT", "Settlement write could not be reloaded");
+              throw new SettlementError(
+                "SETTLEMENT_CONFLICT",
+                "Settlement write could not be reloaded",
+              );
             }
             return complete as SettlementWithRelations;
           },
@@ -348,42 +380,33 @@ export class SettlementService {
       } catch (error) {
         if (error instanceof SettlementError) throw error;
         if (error instanceof WalletError) {
-          throw new SettlementError("ACCOUNT_ERROR", error.message, { walletCode: error.code });
-        }
-        if (isPrismaUniqueViolation(error)) {
-          const winner = await this.prisma.settlement.findUnique({
-            where: {
-              betId_resultVersion: {
-                betId: input.betId,
-                resultVersion: input.resultVersion,
-              },
-            },
-            include: { bet: { select: { betRef: true } }, legs: true },
+          throw new SettlementError("ACCOUNT_ERROR", error.message, {
+            walletCode: error.code,
           });
+        }
+
+        if (isPrismaUniqueViolation(error)) {
+          const winner = await this.findSettlement(input.betId, input.resultVersion);
           if (winner) {
             this.assertReplayMatches(winner.decisionHash, decisionHash, input);
-            return mapSettlement(winner as SettlementWithRelations);
+            return mapSettlement(winner);
           }
-          throw new SettlementError("SETTLEMENT_CONFLICT", "Concurrent settlement conflict");
+          throw new SettlementError(
+            "SETTLEMENT_CONFLICT",
+            "Concurrent settlement conflict",
+          );
         }
+
         if (isPrismaSerializationError(error)) {
           if (attempt < MAX_SERIALIZATION_RETRIES) {
             await new Promise((resolve) => setTimeout(resolve, attempt * 20));
             continue;
           }
 
-          const winner = await this.prisma.settlement.findUnique({
-            where: {
-              betId_resultVersion: {
-                betId: input.betId,
-                resultVersion: input.resultVersion,
-              },
-            },
-            include: { bet: { select: { betRef: true } }, legs: true },
-          });
+          const winner = await this.findSettlement(input.betId, input.resultVersion);
           if (winner) {
             this.assertReplayMatches(winner.decisionHash, decisionHash, input);
-            return mapSettlement(winner as SettlementWithRelations);
+            return mapSettlement(winner);
           }
           throw new SettlementError(
             "SETTLEMENT_CONFLICT",
@@ -397,6 +420,16 @@ export class SettlementService {
     throw new SettlementError("SETTLEMENT_CONFLICT", "Settlement retry loop exhausted");
   }
 
+  async listSettlementRevisions(betId: string): Promise<SettledBet[]> {
+    if (!betId) return [];
+    const rows = await this.prisma.settlement.findMany({
+      where: { betId },
+      orderBy: { resultVersion: "asc" },
+      include: { bet: { select: { betRef: true } }, legs: true },
+    });
+    return rows.map((row) => mapSettlement(row as SettlementWithRelations));
+  }
+
   async listBetHistory(
     userId: string,
     opts?: { state?: "OPEN" | "SETTLED"; limit?: number },
@@ -405,7 +438,11 @@ export class SettlementService {
 
     const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 200);
     const settledAt =
-      opts?.state === "OPEN" ? null : opts?.state === "SETTLED" ? { not: null } : undefined;
+      opts?.state === "OPEN"
+        ? null
+        : opts?.state === "SETTLED"
+          ? { not: null }
+          : undefined;
 
     const bets = await this.prisma.bet.findMany({
       where: {
@@ -445,6 +482,132 @@ export class SettlementService {
           : null,
       };
     });
+  }
+
+  private async findSettlement(
+    betId: string,
+    resultVersion: number,
+  ): Promise<SettlementWithRelations | null> {
+    const row = await this.prisma.settlement.findUnique({
+      where: {
+        betId_resultVersion: {
+          betId,
+          resultVersion,
+        },
+      },
+      include: { bet: { select: { betRef: true } }, legs: true },
+    });
+    return row ? (row as SettlementWithRelations) : null;
+  }
+
+  private async ensureSystemAccount(
+    tx: LedgerTx,
+    accountId: string,
+    currency: string,
+  ): Promise<void> {
+    await tx.walletAccount.upsert({
+      where: { id: accountId },
+      update: {},
+      create: {
+        id: accountId,
+        userId: accountId,
+        kind: "REAL",
+        currency,
+        frozen: false,
+      },
+    });
+  }
+
+  private async postAward(input: {
+    tx: LedgerTx;
+    bet: {
+      id: string;
+      betRef: string;
+      walletAccountId: string;
+      currency: string;
+    };
+    resultVersion: number;
+    outcome: BetSettlementOutcome;
+    creditMinor: number;
+    isRevision: boolean;
+  }): Promise<string | null> {
+    if (input.creditMinor <= 0) return null;
+
+    const sourceAccountId = settlementSourceAccount(input.outcome);
+    await this.ensureSystemAccount(input.tx, sourceAccountId, input.bet.currency);
+
+    const ledgerTxn = await this.ledger.post(
+      {
+        kind: input.outcome === "VOID" ? "STAKE_REFUND" : "WIN_CREDIT",
+        idempotencyKey: input.isRevision
+          ? `resettlement_${input.bet.id}_${input.resultVersion}_award`
+          : `settlement_${input.bet.id}_${input.resultVersion}`,
+        currency: input.bet.currency,
+        refType: input.isRevision ? "BET_RESETTLEMENT_AWARD" : "BET_SETTLEMENT",
+        refId: input.bet.betRef,
+        entries: [
+          {
+            accountId: sourceAccountId,
+            debitMinor: validateMinorUnits(input.creditMinor),
+          },
+          {
+            accountId: input.bet.walletAccountId,
+            creditMinor: validateMinorUnits(input.creditMinor),
+          },
+        ],
+      },
+      {
+        tx: input.tx,
+        allowFrozenAccountIds: [input.bet.walletAccountId],
+      },
+    );
+    return ledgerTxn.id;
+  }
+
+  private async postReversal(input: {
+    tx: LedgerTx;
+    bet: {
+      id: string;
+      betRef: string;
+      walletAccountId: string;
+      currency: string;
+    };
+    resultVersion: number;
+    previous: {
+      resultVersion: number;
+      outcome: BetSettlementOutcome;
+      creditMinor: number;
+    };
+  }): Promise<string> {
+    const sourceAccountId = settlementSourceAccount(input.previous.outcome);
+    await this.ensureSystemAccount(input.tx, sourceAccountId, input.bet.currency);
+
+    const ledgerTxn = await this.ledger.post(
+      {
+        kind: "SETTLEMENT_REVERSAL",
+        idempotencyKey:
+          `resettlement_${input.bet.id}_${input.resultVersion}_reverse_${input.previous.resultVersion}`,
+        currency: input.bet.currency,
+        refType: "BET_RESETTLEMENT_REVERSAL",
+        refId: input.bet.betRef,
+        entries: [
+          {
+            accountId: input.bet.walletAccountId,
+            debitMinor: validateMinorUnits(input.previous.creditMinor),
+          },
+          {
+            accountId: sourceAccountId,
+            creditMinor: validateMinorUnits(input.previous.creditMinor),
+          },
+        ],
+      },
+      {
+        tx: input.tx,
+        allowNegativeDebitAccountIds: [input.bet.walletAccountId],
+        allowFrozenAccountIds: [input.bet.walletAccountId],
+      },
+    );
+    return ledgerTxn.id;
   }
 
   private assertReplayMatches(

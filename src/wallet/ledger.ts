@@ -7,6 +7,7 @@ import {
   type LedgerTransaction,
   type PostInput,
   type LedgerServiceShape,
+  type LedgerPostOptions,
   type LedgerTx,
   WalletError,
 } from "./types.js";
@@ -91,11 +92,12 @@ export class LedgerService implements LedgerServiceShape {
     return this.getBalanceWithDb(db, accountId);
   }
 
-  async post(input: PostInput, opts?: { tx?: LedgerTx }): Promise<LedgerTransaction> {
+  async post(input: PostInput, opts?: LedgerPostOptions): Promise<LedgerTransaction> {
     this.validatePostInput(input);
+    this.validatePostOptions(input, opts);
 
     if (opts?.tx) {
-      const result = await this.postWithinTransaction(opts.tx as LedgerDb, input);
+      const result = await this.postWithinTransaction(opts.tx as LedgerDb, input, opts);
       return result as unknown as LedgerTransaction;
     }
 
@@ -108,7 +110,9 @@ export class LedgerService implements LedgerServiceShape {
     }
 
     try {
-      const result = await this.prisma.$transaction(async (tx) => this.postWithinTransaction(tx as LedgerDb, input));
+      const result = await this.prisma.$transaction(async (tx) =>
+        this.postWithinTransaction(tx as LedgerDb, input, opts),
+      );
       return result as unknown as LedgerTransaction;
     } catch (e) {
       if (e instanceof WalletError) throw e;
@@ -168,7 +172,13 @@ export class LedgerService implements LedgerServiceShape {
     }
   }
 
-  private async postWithinTransaction(db: LedgerDb, input: PostInput) {
+  private async postWithinTransaction(
+    db: LedgerDb,
+    input: PostInput,
+    opts?: LedgerPostOptions,
+  ) {
+    const allowedNegativeDebits = new Set(opts?.allowNegativeDebitAccountIds ?? []);
+    const allowedFrozenAccounts = new Set(opts?.allowFrozenAccountIds ?? []);
     const existingInside = await db.ledgerTransaction.findUnique({
       where: { idempotencyKey: input.idempotencyKey },
       include: { entries: true },
@@ -188,7 +198,7 @@ export class LedgerService implements LedgerServiceShape {
       if (!acc) {
         throw new WalletError("ACCOUNT_NOT_FOUND", `Account ${aid} not found`);
       }
-      if (acc.frozen) {
+      if (acc.frozen && !allowedFrozenAccounts.has(aid)) {
         throw new WalletError("ACCOUNT_FROZEN", `Account ${aid} frozen`);
       }
       if (acc.currency !== input.currency) {
@@ -215,7 +225,7 @@ export class LedgerService implements LedgerServiceShape {
     }
 
     for (const [accountId, totalDebit] of debitPerAccount) {
-      if (isSystemMintId(accountId)) continue;
+      if (isSystemMintId(accountId) || allowedNegativeDebits.has(accountId)) continue;
       const balance = await this.getBalanceWithDb(db, accountId);
       if (balance < totalDebit) {
         throw new WalletError(
@@ -258,6 +268,43 @@ export class LedgerService implements LedgerServiceShape {
     });
     if (!withEntries) throw new WalletError("INVALID_ENTRY", "Transaction write failed");
     return withEntries;
+  }
+
+  private validatePostOptions(input: PostInput, opts?: LedgerPostOptions): void {
+    const entryAccountIds = new Set(input.entries.map((entry) => entry.accountId));
+    const negativeIds = opts?.allowNegativeDebitAccountIds ?? [];
+    const frozenIds = opts?.allowFrozenAccountIds ?? [];
+
+    if (
+      negativeIds.length > 0 &&
+      !(input.kind === "SETTLEMENT_REVERSAL" && input.refType === "BET_RESETTLEMENT_REVERSAL")
+    ) {
+      throw new WalletError(
+        "INVALID_ENTRY",
+        "Negative debit bypass is restricted to authoritative settlement reversals",
+      );
+    }
+
+    if (
+      frozenIds.length > 0 &&
+      input.refType !== "BET_SETTLEMENT" &&
+      input.refType !== "BET_RESETTLEMENT_AWARD" &&
+      input.refType !== "BET_RESETTLEMENT_REVERSAL"
+    ) {
+      throw new WalletError(
+        "INVALID_ENTRY",
+        "Frozen-account bypass is restricted to authoritative settlement accounting",
+      );
+    }
+
+    for (const accountId of [...negativeIds, ...frozenIds]) {
+      if (!entryAccountIds.has(accountId)) {
+        throw new WalletError(
+          "INVALID_ENTRY",
+          `Ledger bypass account ${accountId} is not present in transaction entries`,
+        );
+      }
+    }
   }
 
   private validatePostInput(input: PostInput): void {

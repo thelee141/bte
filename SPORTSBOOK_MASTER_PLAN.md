@@ -13,12 +13,13 @@ Real-money mode DISABLED until licensed. Dev = PLAY MONEY + sandbox.
 - [x] Slice 05 — booking codes + persisted betslip lifecycle
 - [x] Slice 06 — live/realtime stream + reconnect/stale-state guarantees
 - [x] Slice 07 — customer sportsbook web UI + responsive design system
-- [ ] Later — explicit resettlement/corrections, cashout, sandbox payments, promos,
-      accounts/RG/compliance/admin, games/virtuals/jackpot, hardening
+- [x] Slice 08 — append-only result corrections + resettlement accounting
+- [ ] Later — cashout, sandbox payments, promos, accounts/RG/compliance/admin,
+      games/virtuals/jackpot, hardening
 
-All 7 numbered slices are implemented.
-Current verified gate after Slice 07: 77/77 tests + core/web typecheck + lint +
-production build, plus headed-browser desktop/mobile smoke QA.
+All 8 numbered slices are implemented.
+Current verified gate after Slice 08: 86/86 tests + core/web typecheck + lint +
+production build + seven-migration replay + historical Slice 08 upgrade check.
 Real-money mode remains OFF.
 
 ## Phase 0 — Foundations & unknowns
@@ -96,11 +97,16 @@ Real-money mode remains OFF.
       - settlement + ledger credit/refund in one DB transaction
       - idempotent concurrent replay
       - open/settled history query
-- [ ] Result correction + resettlement ledger adjustments
-      - currently newer resultVersion returns RESETTLEMENT_REQUIRED
-      - no historical settlement is overwritten
-- Acceptance: concurrency tests (double-submit, stale-price, suspend-mid-submit,
-  double-settlement) safe; correction/resettlement still required before Phase 3 is complete
+- [x] Result correction + resettlement ledger adjustments
+      - higher resultVersion appends a new settlement revision and never overwrites history
+      - prior full entitlement is reversed with immutable double-entry accounting
+      - corrected full entitlement is awarded/refunded with source-account semantics preserved
+      - signed adjustmentMinor records the delta versus the immediately previous revision
+      - stale versions, replay and concurrent identical corrections are handled safely
+      - spent winnings may be clawed back into a signed negative derived balance while
+        ordinary debits still enforce insufficient-funds/frozen-wallet rules
+- Acceptance: double-submit, stale-price, suspend-mid-submit, double-settlement,
+  correction replay/concurrency and negative-balance clawback paths are covered
 
 ## Phase 4 — Wallet, payments (sandbox), promos
 
@@ -135,17 +141,15 @@ Real-money mode remains OFF.
 
 ## MVP boundary
 
-The seven numbered slices now provide a working fixture-fed play-money MVP shell:
+The eight numbered slices now provide a working fixture-fed play-money MVP shell:
 prematch + live/realtime + persisted slip/booking + wallet + placement + settlement
-+ history + customer web UI + immutable receipt references.
++ append-only corrections + history + customer web UI + immutable receipt references.
 
 The transaction/customer path now covers:
 catalogue → slip → quote reconciliation → placement → ledger debit → open bet →
-settlement → payout/refund → history/receipt.
+settlement → payout/refund → corrected result/reversal/re-award → history/receipt.
 
-Still required before Phase 3 is fully complete / the broader product can be
-treated as launch-ready:
-- explicit correction/resettlement accounting
+Still required before the broader product can be treated as launch-ready:
 - Singles/System/Bet Builder product semantics beyond the current simple
   single-or-multiple independent-leg engine
 - cashout quotes/acceptance
